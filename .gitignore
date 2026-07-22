@@ -127,3 +127,7 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# SADE-IoV generated artifacts (models, figures, reports)
+artifacts/*
+!artifacts/.gitkeep
