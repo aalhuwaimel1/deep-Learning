@@ -1,0 +1,460 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SADE-IoV — Live Traffic & Encryption Simulator</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root{
+    --bg:#070c14; --panel:#0f1826; --panel-2:#0b131f; --line:#1d2c3f;
+    --ink:#e8f0fa; --dim:#95a8bd; --mute:#5f7288;
+    --accent:#38bdf8;
+    --s0:#22c55e; --s1:#eab308; --s2:#f97316; --s3:#ef4444;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);overflow:hidden}
+  .app{display:grid;grid-template-columns:1fr 372px;grid-template-rows:52px 1fr;height:100vh}
+
+  /* top bar */
+  .top{grid-column:1/3;display:flex;align-items:center;gap:14px;padding:0 16px;
+       border-bottom:1px solid var(--line);background:var(--panel-2)}
+  .brand{font-family:var(--mono);font-weight:700;font-size:15px;letter-spacing:.03em}
+  .brand b{color:var(--accent)}
+  .brand small{color:var(--mute);font-weight:400;margin-inline-start:8px;font-size:11.5px;letter-spacing:.14em;text-transform:uppercase}
+  .scen{margin-inline-start:auto;display:flex;gap:7px;flex-wrap:wrap}
+  .scen button{font-family:var(--mono);font-size:12px;border:1px solid var(--line);background:var(--panel);
+    color:var(--dim);border-radius:8px;padding:7px 12px;cursor:pointer;transition:.14s;white-space:nowrap}
+  .scen button:hover{border-color:var(--accent);color:var(--ink)}
+  .scen button.on{color:#fff;font-weight:600}
+  .scen button.jam.on{background:#7c2d12;border-color:var(--s2)}
+  .scen button.spoof.on{background:#713f12;border-color:var(--s1)}
+  .scen button.flood.on{background:#5b1717;border-color:var(--s3)}
+  .scen .sep{width:1px;background:var(--line);margin:6px 2px}
+  .scen .ctrl{background:var(--accent);color:#04141f;border-color:var(--accent);font-weight:600}
+
+  /* stage */
+  .stage{position:relative;overflow:hidden;background:#0a0f18}
+  canvas#road{position:absolute;inset:0;width:100%;height:100%;display:block}
+  .stage .overlay{position:absolute;left:16px;top:14px;font-family:var(--mono);font-size:11.5px;
+    color:var(--dim);background:rgba(9,15,24,.7);border:1px solid var(--line);border-radius:8px;padding:8px 11px;
+    backdrop-filter:blur(4px);pointer-events:none;line-height:1.7}
+  .stage .overlay b{color:var(--ink)}
+  .alarm{position:absolute;inset:0;pointer-events:none;box-shadow:inset 0 0 0 0 var(--s3);opacity:0;transition:opacity .2s}
+  .alarm.on{opacity:1;box-shadow:inset 0 0 120px 8px rgba(239,68,68,.55);animation:flash 1s infinite}
+  @keyframes flash{50%{box-shadow:inset 0 0 60px 4px rgba(239,68,68,.25)}}
+  @media (prefers-reduced-motion:reduce){.alarm.on{animation:none}}
+  .alarm .txt{position:absolute;top:18px;left:50%;transform:translateX(-50%);font-family:var(--mono);
+    font-weight:700;color:#fff;background:var(--s3);padding:6px 16px;border-radius:8px;font-size:13px;letter-spacing:.08em}
+
+  /* side panel */
+  .side{border-inline-start:1px solid var(--line);background:var(--panel-2);overflow-y:auto;padding:16px}
+  .side::-webkit-scrollbar{width:8px}.side::-webkit-scrollbar-thumb{background:var(--line);border-radius:8px}
+
+  .statebox{border-radius:14px;padding:16px;color:#fff;transition:background .3s}
+  .statebox .k{font-family:var(--mono);font-size:11px;letter-spacing:.18em;text-transform:uppercase;opacity:.9}
+  .statebox .n{font-size:24px;font-weight:800;margin-top:3px}
+  .statebox .c{font-family:var(--mono);font-size:12px;margin-top:7px;opacity:.95}
+
+  .block{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px;margin-top:12px}
+  .block h4{margin:0 0 11px;font-family:var(--mono);font-size:11px;letter-spacing:.13em;text-transform:uppercase;color:var(--dim);font-weight:600}
+
+  .gauge .row{display:flex;justify-content:space-between;font-family:var(--mono);font-size:12px;color:var(--dim);margin-bottom:6px}
+  .gauge .row b{color:var(--ink);font-variant-numeric:tabular-nums}
+  .track{height:11px;border-radius:7px;background:var(--line);position:relative;overflow:hidden}
+  .track .fill{position:absolute;inset:0 auto 0 0;border-radius:7px;transition:width .25s,background .25s}
+  .thr{position:absolute;top:-3px;bottom:-3px;width:2px;background:rgba(255,255,255,.35)}
+
+  .tele{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+  .tele .m{background:var(--panel-2);border:1px solid var(--line);border-radius:9px;padding:9px;text-align:center}
+  .tele .m .val{font-family:var(--mono);font-size:16px;font-weight:700;font-variant-numeric:tabular-nums}
+  .tele .m .lab{font-size:9.5px;color:var(--mute);font-family:var(--mono);margin-top:3px;letter-spacing:.03em}
+  .tele .m.hot .val{color:var(--s3)}
+
+  .crow{display:flex;justify-content:space-between;align-items:center;font-family:var(--mono);font-size:12px;margin-bottom:8px}
+  .crow span{color:var(--mute)} .crow b{color:var(--ink);font-variant-numeric:tabular-nums}
+  .cipher{font-family:var(--mono);font-size:11px;line-height:1.5;word-break:break-all;
+    background:#060b12;border:1px solid var(--line);border-radius:8px;padding:9px;color:#7fe0a1;min-height:52px}
+  .cipher .lbl{color:var(--mute);display:block;margin-bottom:3px;font-size:10px}
+  .plain{color:var(--dim)}
+  .keybadge{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:11px;
+    background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:3px 8px;color:var(--accent)}
+
+  .log{font-family:var(--mono);font-size:11px;line-height:1.65;max-height:150px;overflow-y:auto}
+  .log div{padding:2px 0;border-bottom:1px solid rgba(255,255,255,.03);color:var(--dim)}
+  .log .t{color:var(--mute)}
+  .log .e0{color:var(--s0)}.log .e1{color:var(--s1)}.log .e2{color:var(--s2)}.log .e3{color:var(--s3)}
+  .log b{color:var(--ink)}
+
+  .foot{font-size:10.5px;color:var(--mute);font-family:var(--mono);margin-top:12px;line-height:1.6}
+
+  @media (max-width:880px){
+    .app{grid-template-columns:1fr;grid-template-rows:52px 46vh 1fr}
+    .side{border-inline-start:none;border-top:1px solid var(--line)}
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="top">
+    <div class="brand">SADE&#8209;<b>IoV</b><small>live simulator</small></div>
+    <div class="scen">
+      <button class="jam"   id="b_jam"   data-atk="jam">&#128268; RF Jammer</button>
+      <button class="spoof" id="b_spoof" data-atk="spoof">&#128123; ECU Spoofer</button>
+      <button class="flood" id="b_flood" data-atk="flood">&#127754; Packet Flood</button>
+      <span class="sep"></span>
+      <button class="ctrl" id="b_pause">&#10073;&#10073; Pause</button>
+      <button id="b_speed">Speed ×1</button>
+    </div>
+  </div>
+
+  <div class="stage">
+    <canvas id="road"></canvas>
+    <div class="overlay" id="ov">initialising…</div>
+    <div class="alarm" id="alarm"><div class="txt">&#9888; CRITICAL — CHANNEL ISOLATED</div></div>
+  </div>
+
+  <div class="side">
+    <div class="statebox" id="statebox">
+      <div class="k" id="st_k">State 0 · Low</div>
+      <div class="n" id="st_n">AES-128</div>
+      <div class="c" id="st_c">minimum latency</div>
+    </div>
+
+    <div class="block gauge">
+      <h4>Risk Assessment · S&#8320;</h4>
+      <div class="row"><span>situational risk</span><b id="risk_v">8 / 100</b></div>
+      <div class="track">
+        <div class="fill" id="risk_fill" style="width:8%"></div>
+        <div class="thr" style="left:40%"></div><div class="thr" style="left:85%"></div><div class="thr" style="left:95%"></div>
+      </div>
+      <div style="font-size:11px;color:var(--dim);margin-top:9px" id="why">Low-risk optimisation — lightweight cipher.</div>
+    </div>
+
+    <div class="block">
+      <h4>Live Telemetry · F&#8348;</h4>
+      <div class="tele">
+        <div class="m" id="m_rssi"><div class="val">−60</div><div class="lab">R_RSSI dBm</div></div>
+        <div class="m" id="m_vvar"><div class="val">0.5</div><div class="lab">V_var</div></div>
+        <div class="m" id="m_alpha"><div class="val">10</div><div class="lab">&#945;_freq</div></div>
+      </div>
+    </div>
+
+    <div class="block">
+      <h4>Encryption Engine <span class="keybadge" id="keyb">&#128273; k#0</span></h4>
+      <div class="crow"><span>cipher</span><b id="c_alg">AES-128-GCM</b></div>
+      <div class="crow"><span>key rotation</span><b id="c_rot">every 64 msg</b></div>
+      <div class="crow"><span>msg #</span><b id="c_seq">0</b></div>
+      <div class="cipher">
+        <span class="lbl">PLAINTEXT beacon</span>
+        <span class="plain" id="c_plain">{v:"AYU-042",spd:0,pos:[0,0]}</span>
+      </div>
+      <div class="cipher" style="margin-top:8px">
+        <span class="lbl" id="c_ct_lbl">CIPHERTEXT (AES-GCM)</span>
+        <span id="c_ct">—</span>
+      </div>
+    </div>
+
+    <div class="block">
+      <h4>Event & Ledger Log</h4>
+      <div class="log" id="log"></div>
+    </div>
+
+    <div class="foot" id="note">
+      Encryption is performed live with the browser WebCrypto AES-GCM engine.
+      Risk scoring uses an in-page approximation of the trained XGBoost model.
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+"use strict";
+var $=function(id){return document.getElementById(id);};
+var cv=$('road'), ctx=cv.getContext('2d');
+var DPR=Math.min(2, window.devicePixelRatio||1);
+var W=0,H=0;
+function resize(){ var r=cv.parentElement.getBoundingClientRect(); W=r.width;H=r.height;
+  cv.width=W*DPR;cv.height=H*DPR;ctx.setTransform(DPR,0,0,DPR,0,0);}
+window.addEventListener('resize',resize); resize();
+
+// ---------- config ----------
+var LANES=4, THR={CRIT:95,HIGH:85,FLOOR:50,MED:40};
+var STATES={
+ 0:{k:"State 0 · Low",n:"AES-128",c:"minimum latency",col:"#22c55e",alg:"AES-128-GCM",rot:64,bits:128},
+ 1:{k:"State 1 · Medium",n:"AES-256",c:"+ dynamic key rotation",col:"#eab308",alg:"AES-256-GCM",rot:64,bits:256},
+ 2:{k:"State 2 · High",n:"AES-256 + PUF",c:"+ PUF challenge + async ledger",col:"#f97316",alg:"AES-256-GCM",rot:8,bits:256},
+ 3:{k:"State 3 · Critical",n:"ISOLATE",c:"channel isolation + driver alarm",col:"#ef4444",alg:"— (blocked)",rot:1,bits:256}
+};
+function clamp(x,a,b){return Math.max(a,Math.min(b,x));}
+function riskScore(rssi,vvar,alpha){
+  var jam=clamp((-rssi-66)/34,0,1), inj=clamp((alpha-14)/32,0,1), spf=clamp((vvar-1.3)/5.7,0,1);
+  return {S:clamp(Math.round(7+Math.max(jam,inj,spf)*93),0,100),jam:jam,inj:inj,spf:spf};
+}
+function orchestrate(S,D,U){
+  if(S>=THR.CRIT)return 3;
+  if(S>=THR.HIGH||(D===2&&S>THR.FLOOR))return 2;
+  if(U==="MAX_PRIVACY"||S>=THR.MED)return 1;
+  return 0;
+}
+
+// ---------- world ----------
+var world={scroll:0, ego:null, cars:[], attacks:{jam:false,spoof:false,flood:false}, packets:[], rings:[]};
+function laneX(l){ var roadW=Math.min(W*0.62,520), left=(W-roadW)/2, lw=roadW/LANES; return left+lw*(l+0.5); }
+function roadBounds(){ var roadW=Math.min(W*0.62,520); return {w:roadW,left:(W-roadW)/2,lw:roadW/LANES}; }
+function mkCar(lane,y,speed,kind){ return {lane:lane,x:laneX(lane),y:y,speed:speed,kind:kind||'peer',
+  hue:kind==='ego'?200:(180+Math.random()*80|0), link:0}; }
+function initWorld(){
+  world.ego=mkCar(1, 0, 2.1,'ego');
+  world.cars=[];
+  for(var i=0;i<7;i++){ world.cars.push(mkCar((Math.random()*LANES)|0, -120-i*130-Math.random()*60,
+      1.6+Math.random()*1.1,'peer')); }
+  world.cars.push(mkCar(3,-300,1.9,'peer'));
+}
+initWorld();
+
+// ---------- telemetry from world ----------
+var tele={rssi:-60,vvar:0.5,alpha:10};
+function updateTelemetry(){
+  var tgt={rssi:-58-Math.random()*4, vvar:0.4+Math.random()*0.4, alpha:9+Math.random()*2};
+  if(world.attacks.jam){ tgt.rssi=-92-Math.random()*8; }
+  if(world.attacks.spoof){ tgt.vvar=5.5+Math.random()*2.5; }
+  if(world.attacks.flood){ tgt.alpha=40+Math.random()*10; }
+  tele.rssi += (tgt.rssi-tele.rssi)*0.12;
+  tele.vvar += (tgt.vvar-tele.vvar)*0.12;
+  tele.alpha+= (tgt.alpha-tele.alpha)*0.12;
+}
+
+// ---------- encryption (WebCrypto AES-GCM, live) ----------
+var haveSubtle = !!(window.crypto && window.crypto.subtle && window.crypto.subtle.encrypt);
+var keyState={raw:null,ck:null,counter:0};
+function randBytes(n){var a=new Uint8Array(n);(window.crypto||{}).getRandomValues?crypto.getRandomValues(a):a.forEach(function(_,i){a[i]=Math.random()*256|0;});return a;}
+async function sha256(buf){ if(haveSubtle){return new Uint8Array(await crypto.subtle.digest('SHA-256',buf));}
+  // tiny fallback hash
+  var h=new Uint8Array(32),x=5381; for(var i=0;i<buf.length;i++){x=((x*33)^buf[i])>>>0; h[i%32]^=x&255;} return h;}
+async function rotateKey(bits){
+  var seed = keyState.raw || randBytes(32);
+  var ctr=new Uint8Array([keyState.counter&255,(keyState.counter>>8)&255]);
+  var mix=new Uint8Array(seed.length+2); mix.set(seed); mix.set(ctr,seed.length);
+  var digest=await sha256(mix);
+  keyState.raw=digest;
+  var kb=digest.slice(0, bits/8);
+  if(haveSubtle){ keyState.ck=await crypto.subtle.importKey('raw',kb,{name:'AES-GCM'},false,['encrypt']); }
+  keyState.counter++;
+  return kb;
+}
+function hex(bytes,max){ var s='',n=Math.min(bytes.length,max||bytes.length);
+  for(var i=0;i<n;i++){s+=('0'+bytes[i].toString(16)).slice(-2);} if(bytes.length>n)s+='…'; return s; }
+async function encryptBeacon(text,bits){
+  var enc=new TextEncoder().encode(text);
+  if(haveSubtle && keyState.ck){
+    var iv=randBytes(12);
+    var ct=new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv:iv},keyState.ck,enc));
+    return {ct:ct, real:true};
+  }
+  // fallback: keystream from repeated hashes (demo only)
+  var out=new Uint8Array(enc.length), ks=keyState.raw||randBytes(32);
+  for(var i=0;i<enc.length;i++){ out[i]=enc[i]^ks[i%ks.length]^((i*31)&255); }
+  return {ct:out, real:false};
+}
+
+// ---------- decision state ----------
+var sim={S:8,state:0,D:2,U:"STANDARD",seq:0,puf:0,ledger:0,paused:false,speed:1,acc:0};
+function logEvent(cls,html){ var l=$('log'); var d=document.createElement('div');
+  var t=new Date(); var ts=('0'+t.getHours()).slice(-2)+':'+('0'+t.getMinutes()).slice(-2)+':'+('0'+t.getSeconds()).slice(-2);
+  d.innerHTML='<span class="t">'+ts+'</span> <span class="'+cls+'">'+html+'</span>';
+  l.insertBefore(d,l.firstChild); while(l.children.length>40)l.removeChild(l.lastChild); }
+
+// one "epoch": telemetry -> risk -> state -> encrypt
+var lastState=-1;
+async function epoch(){
+  var r=riskScore(tele.rssi,tele.vvar,tele.alpha);
+  sim.S=r.S; sim.state=orchestrate(sim.S,sim.D,sim.U);
+  var info=STATES[sim.state]; sim.seq++;
+  // key rotation
+  var rotated=false;
+  if(!keyState.raw || sim.seq % info.rot === 0){ await rotateKey(info.bits); rotated=true; }
+  // encryption (skip in critical / channel isolated)
+  var plain='{v:"AYU-042",spd:'+(world.ego.speed*40|0)+',seq:'+sim.seq+'}';
+  $('c_plain').textContent=plain;
+  if(sim.state===3){
+    $('c_ct').textContent='—— channel isolated ——';
+    $('c_ct').style.color='#ef4444';
+    sim.ledger++; logEvent('e3','<b>CRITICAL</b> attack verified · channel isolated, alarm raised');
+  } else {
+    var res=await encryptBeacon(plain,info.bits);
+    $('c_ct').style.color='#7fe0a1';
+    $('c_ct').textContent=hex(res.ct,26);
+    $('c_ct_lbl').textContent='CIPHERTEXT ('+(res.real?'WebCrypto AES-GCM':'demo cipher')+')';
+    if(sim.state===2){ sim.puf++; sim.ledger++;
+      if(sim.seq%3===0) logEvent('e2','HIGH · <b>PUF</b> challenge ok · ledger append #'+sim.ledger); }
+  }
+  if(rotated){ $('keyb').innerHTML='&#128273; k#'+keyState.counter;
+    if(sim.state>=1 && sim.seq>1) logEvent('e'+sim.state,'key rotated &rarr; k#'+keyState.counter+' ('+info.bits+'-bit)'); }
+  if(sim.state!==lastState){
+    logEvent('e'+sim.state,'state &rarr; <b>'+info.k.replace('· ','')+'</b>');
+    lastState=sim.state;
+  }
+  // panel
+  $('c_seq').textContent=sim.seq; $('c_alg').textContent=info.alg;
+  $('c_rot').textContent= info.rot>=64?'every 64 msg':('every '+info.rot+' msg');
+}
+
+// ---------- rendering ----------
+function drawCar(c,camY){
+  var y=c.y-camY; if(y<-60||y>H+60)return;
+  var w=26,h=46, x=c.x-w/2;
+  ctx.save();
+  // body
+  var grad=ctx.createLinearGradient(x,y,x,y+h);
+  var base=c.kind==='ego'?'#38bdf8':'hsl('+c.hue+',45%,60%)';
+  grad.addColorStop(0,base); grad.addColorStop(1,c.kind==='ego'?'#0e7490':'hsl('+c.hue+',45%,42%)');
+  ctx.fillStyle=grad;
+  rr(x,y,w,h,7); ctx.fill();
+  // windshield
+  ctx.fillStyle='rgba(6,12,20,.55)'; rr(x+4,y+7,w-8,11,3); ctx.fill(); rr(x+4,y+h-17,w-8,9,3); ctx.fill();
+  // headlights
+  ctx.fillStyle='rgba(255,245,200,.9)'; ctx.fillRect(x+3,y+1,5,3); ctx.fillRect(x+w-8,y+1,5,3);
+  if(c.kind==='ego'){ ctx.strokeStyle='rgba(56,189,248,.9)';ctx.lineWidth=2; rr(x-2,y-2,w+4,h+4,9); ctx.stroke(); }
+  ctx.restore();
+}
+function rr(x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);
+  ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath();}
+
+function draw(){
+  var rb=roadBounds();
+  // background
+  ctx.fillStyle='#070c14'; ctx.fillRect(0,0,W,H);
+  // roadside
+  ctx.fillStyle='#0c1420'; ctx.fillRect(rb.left-24,0,rb.w+48,H);
+  ctx.fillStyle='#0f1a28'; ctx.fillRect(rb.left,0,rb.w,H);
+  // lane markings (scrolling)
+  ctx.strokeStyle='rgba(150,170,190,.30)'; ctx.lineWidth=3; ctx.setLineDash([26,22]);
+  var off=(world.scroll*1.0)%48;
+  for(var l=1;l<LANES;l++){ var x=rb.left+rb.lw*l; ctx.beginPath();
+    ctx.lineDashOffset=-off; ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke(); }
+  ctx.setLineDash([]);
+  // edges
+  ctx.strokeStyle='rgba(56,189,248,.35)';ctx.lineWidth=3;
+  ctx.beginPath();ctx.moveTo(rb.left,0);ctx.lineTo(rb.left,H);ctx.moveTo(rb.left+rb.w,0);ctx.lineTo(rb.left+rb.w,H);ctx.stroke();
+
+  var camY=world.ego.y-(H*0.68);
+
+  // V2X links from ego to nearby peers
+  var ex=world.ego.x, ey=world.ego.y-camY;
+  for(var i=0;i<world.cars.length;i++){
+    var c=world.cars[i], cy=c.y-camY, d=Math.hypot(c.x-ex,cy-ey);
+    if(d<230 && cy>-40 && cy<H+40){
+      var t=1-d/230;
+      var col= sim.state===3?'239,68,68': sim.state===2?'249,115,22': sim.state>=1?'234,179,8':'56,189,248';
+      ctx.strokeStyle='rgba('+col+','+(0.15+t*0.5)+')'; ctx.lineWidth=1.4; ctx.setLineDash([4,6]);
+      ctx.lineDashOffset=-(world.scroll*2%20);
+      ctx.beginPath();ctx.moveTo(ex,ey);ctx.lineTo(c.x,cy);ctx.stroke(); ctx.setLineDash([]);
+      // travelling packet dot
+      var pp=(world.scroll*0.02 + i*0.3)%1;
+      ctx.fillStyle='rgba('+col+',0.95)';
+      ctx.beginPath();ctx.arc(ex+(c.x-ex)*pp, ey+(cy-ey)*pp,2.6,0,7);ctx.fill();
+    }
+  }
+
+  // attack visuals
+  if(world.attacks.jam){
+    ctx.save();
+    var jx=rb.left-14, jy=H*0.32;
+    for(var k=0;k<3;k++){ var rr2=((world.scroll*1.6+k*40)%120);
+      ctx.strokeStyle='rgba(249,115,22,'+(0.5-rr2/240)+')';ctx.lineWidth=2;
+      ctx.beginPath();ctx.arc(jx,jy,rr2,-0.6,0.6);ctx.stroke(); }
+    ctx.fillStyle='#f97316';ctx.font='18px '+'sans-serif';ctx.fillText('📡',jx-20,jy+6);
+    ctx.restore();
+  }
+  if(world.attacks.flood){
+    for(var f=0;f<14;f++){ var fy=((world.scroll*3+f*57)% (H+40))-20;
+      ctx.fillStyle='rgba(239,68,68,'+(0.4+Math.random()*0.3)+')';
+      ctx.beginPath();ctx.arc(world.ego.x+(Math.random()*40-20), fy,2.2,0,7);ctx.fill(); }
+  }
+  if(world.attacks.spoof){
+    // ghost duplicate of ego
+    var gx=world.ego.x+ (Math.sin(world.scroll*0.05)*40);
+    ctx.globalAlpha=0.4; drawCar({x:gx,y:world.ego.y+8,hue:0,kind:'peer'},camY); ctx.globalAlpha=1;
+    ctx.fillStyle='rgba(234,179,8,.9)';ctx.font='16px sans-serif';ctx.fillText('👻',gx+16,world.ego.y-camY);
+  }
+
+  // peers + ego
+  for(var j=0;j<world.cars.length;j++) drawCar(world.cars[j],camY);
+  drawCar(world.ego,camY);
+
+  // ego state ring pulse
+  var col2=STATES[sim.state].col;
+  ctx.strokeStyle=col2; ctx.globalAlpha=0.35+0.25*Math.sin(world.scroll*0.1);
+  ctx.lineWidth=2; ctx.beginPath();ctx.arc(world.ego.x,world.ego.y-camY,34,0,7);ctx.stroke();ctx.globalAlpha=1;
+}
+
+// ---------- panel refresh ----------
+function refreshPanel(){
+  var info=STATES[sim.state];
+  var sb=$('statebox'); sb.style.background='linear-gradient(135deg,'+info.col+', color-mix(in srgb,'+info.col+' 60%,#000))';
+  $('st_k').textContent=info.k; $('st_n').textContent=info.n; $('st_c').textContent=info.c;
+  $('risk_v').textContent=sim.S+' / 100';
+  var fill=$('risk_fill'); fill.style.width=sim.S+'%'; fill.style.background=info.col;
+  $('m_rssi').querySelector('.val').textContent='−'+Math.abs(tele.rssi|0);
+  $('m_vvar').querySelector('.val').textContent=tele.vvar.toFixed(1);
+  $('m_alpha').querySelector('.val').textContent=(tele.alpha|0);
+  $('m_rssi').className='m'+(tele.rssi<-80?' hot':''); $('m_vvar').className='m'+(tele.vvar>3?' hot':'');
+  $('m_alpha').className='m'+(tele.alpha>28?' hot':'');
+  var why= sim.state===3?'Verified active attack — channel isolated, driver alarm.':
+    sim.state===2?(sim.D===2&&sim.S<THR.HIGH?'Safety-control floor forces HIGH (downgrade blocked).':'High risk — AES-256 + PUF + audit log.'):
+    sim.state===1?'Moderate risk — AES-256 + dynamic key rotation.':'Low-risk optimisation — lightweight AES-128.';
+  $('why').textContent=why;
+  $('alarm').className='alarm'+(sim.state===3?' on':'');
+  var atk=[]; if(world.attacks.jam)atk.push('JAMMING'); if(world.attacks.spoof)atk.push('SPOOFING'); if(world.attacks.flood)atk.push('FLOODING');
+  $('ov').innerHTML='<b>Ego:</b> AYU-042 &nbsp; <b>peers:</b> '+world.cars.length+
+    ' &nbsp; <b>V2X:</b> broadcasting<br><b>threats:</b> '+(atk.length?'<span style="color:#f97316">'+atk.join(', ')+'</span>':'<span style="color:#22c55e">none — clear</span>');
+}
+
+// ---------- loop ----------
+var last=0, epochAcc=0;
+function frame(ts){
+  var dt=Math.min(40,ts-last||16); last=ts;
+  if(!sim.paused){
+    var sp=sim.speed;
+    world.scroll+=dt*0.06*sp;
+    // move peers relative to ego (ego faster => peers drift back)
+    for(var i=0;i<world.cars.length;i++){ var c=world.cars[i];
+      c.y+=(world.ego.speed-c.speed)*dt*0.06*sp*-1*0 + 0; // keep formation, use scroll for motion
+      c.y-= (c.speed-world.ego.speed)*dt*0.09*sp;
+      // recycle
+      var camY=world.ego.y-(H*0.68);
+      if(c.y-camY>H+80){ c.y-= (H+260); c.lane=(Math.random()*LANES)|0; c.x=laneX(c.lane); c.speed=1.5+Math.random()*1.2; }
+      if(c.y-camY<-260){ c.y+= (H+260); c.lane=(Math.random()*LANES)|0; c.x=laneX(c.lane); }
+      // gentle lane keep
+      c.x += (laneX(c.lane)-c.x)*0.05;
+    }
+    world.ego.y-=world.ego.speed*dt*0.09*sp; // ego advances (world scrolls)
+    updateTelemetry();
+    epochAcc+=dt*sp;
+    if(epochAcc>=520){ epochAcc=0; epoch(); }
+  }
+  draw(); refreshPanel();
+  requestAnimationFrame(frame);
+}
+
+// ---------- controls ----------
+function toggle(atk,btn){ world.attacks[atk]=!world.attacks[atk]; $(btn).classList.toggle('on',world.attacks[atk]);
+  logEvent(world.attacks[atk]?'e2':'e0', (world.attacks[atk]?'&#9888; injected ':'cleared ')+'<b>'+atk.toUpperCase()+'</b>'); }
+$('b_jam').onclick=function(){toggle('jam','b_jam');};
+$('b_spoof').onclick=function(){toggle('spoof','b_spoof');};
+$('b_flood').onclick=function(){toggle('flood','b_flood');};
+$('b_pause').onclick=function(){ sim.paused=!sim.paused; this.innerHTML=sim.paused?'&#9654; Play':'&#10073;&#10073; Pause'; };
+var speeds=[1,2,0.5]; var si=0;
+$('b_speed').onclick=function(){ si=(si+1)%speeds.length; sim.speed=speeds[si]; this.textContent='Speed ×'+sim.speed; };
+
+// boot
+logEvent('e0','simulator online · WebCrypto '+(haveSubtle?'available':'fallback')+' · broadcasting V2X beacons');
+rotateKey(128).then(function(){ epoch(); });
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
