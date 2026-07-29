@@ -71,8 +71,13 @@ State-0 safety window.
 matches the top models on recall/F1 while training fastest and keeping inference
 among the cheapest, which suits constrained edge OBUs.
 
-Figures written to `artifacts/`: `roc_pr.png`, `multiseed.png`, `ablation.png`,
-`energy.png`, `latency_cdf.png`, `confusion_matrix.png`, `model_comparison.png`.
+Figures written to `artifacts/`: `dataset.png` (class balance + per-class feature
+distributions), `roc_pr.png`, `multiseed.png`, `ablation.png`, `energy.png`,
+`latency_cdf.png`, `confusion_matrix.png`, `model_comparison.png`.
+
+The **dataset the risk engine trains on** is reported (provenance, size, class
+balance) at the top of every `reproduce_all` run and visualised in
+`artifacts/dataset.png`.
 
 ## Quick start
 

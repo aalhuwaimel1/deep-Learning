@@ -259,6 +259,36 @@ def fig_latency_cdf(seed: int, n_epochs: int, path: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+def dataset_overview(seed: int = config.DEFAULT_SEED, n_epochs: int = config.N_EPOCHS) -> dict:
+    """Provenance + class balance of the dataset the risk engine trains on."""
+    from .datasets import describe, load_synthetic
+
+    df = load_synthetic(n_epochs=n_epochs, seed=seed)
+    info = describe(df)
+    info["source"] = "synthetic V2X benchmark (10k epochs); real VeReMi/CICIoV2024 via scripts.fetch_datasets"
+    return info
+
+
+def fig_dataset(seed: int, n_epochs: int, path: str) -> str:
+    """Show the dataset: class counts + the three telemetry-feature distributions."""
+    plt = _plt()
+    df = generate_dataset(n_epochs=n_epochs, seed=seed)
+    fig, ax = plt.subplots(1, 4, figsize=(13, 3.4))
+    order = [config.PROFILE_NORMAL, config.PROFILE_JAMMING,
+             config.PROFILE_INJECTION, config.PROFILE_SPOOFING]
+    counts = [int((df["profile"] == p).sum()) for p in order]
+    ax[0].bar(order, counts, color=["#2ca02c", "#f97316", "#ef4444", "#8172b2"])
+    ax[0].set_title("class balance"); ax[0].tick_params(axis="x", rotation=30)
+    for j, feat in enumerate(config.FEATURES):
+        for p, col in zip(order, ["#2ca02c", "#f97316", "#ef4444", "#8172b2"]):
+            ax[j + 1].hist(df[df.profile == p][feat], bins=40, alpha=0.5, color=col, label=p)
+        ax[j + 1].set_title(feat)
+    ax[1].legend(fontsize=7)
+    fig.suptitle(f"SADE-IoV dataset — {len(df):,} labelled V2X epochs", fontsize=12)
+    fig.tight_layout(); fig.savefig(path, dpi=130); plt.close(fig)
+    return path
+
+
 # Orchestrator
 # ---------------------------------------------------------------------------
 def run_all(n_epochs: int = config.N_EPOCHS, seeds: list[int] | None = None,
@@ -269,6 +299,9 @@ def run_all(n_epochs: int = config.N_EPOCHS, seeds: list[int] | None = None,
     os.makedirs(outdir, exist_ok=True)
     seed0 = seeds[0]
 
+    print("Dataset used for training the risk engine:")
+    ds = dataset_overview(seed0, n_epochs)
+
     ms = multi_seed_risk_engine(seeds, n_epochs)
     curves = roc_pr_curves(seed0, n_epochs)
     ab = ablation(seed0, n_epochs)
@@ -276,6 +309,7 @@ def run_all(n_epochs: int = config.N_EPOCHS, seeds: list[int] | None = None,
     lb = latency_budget(seed0, n_epochs)
 
     figs = {
+        "dataset": fig_dataset(seed0, n_epochs, f"{outdir}/dataset.png"),
         "roc_pr": fig_roc_pr(curves, f"{outdir}/roc_pr.png"),
         "multiseed": fig_multiseed(ms, f"{outdir}/multiseed.png"),
         "ablation": fig_ablation(ab, f"{outdir}/ablation.png"),
@@ -283,7 +317,7 @@ def run_all(n_epochs: int = config.N_EPOCHS, seeds: list[int] | None = None,
         "latency_cdf": fig_latency_cdf(seed0, n_epochs, f"{outdir}/latency_cdf.png"),
     }
     results = {
-        "n_epochs": n_epochs, "seeds": seeds,
+        "n_epochs": n_epochs, "seeds": seeds, "dataset": ds,
         "multi_seed_risk_engine": ms,
         "roc_pr_auc": {"roc_auc": curves["roc"]["auc"], "pr_ap": curves["pr"]["ap"]},
         "ablation": ab, "energy": en, "latency_budget": lb, "figures": figs,
