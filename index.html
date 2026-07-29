@@ -187,7 +187,7 @@
 .avatar svg{width:100%;height:auto;display:block}
 .bubblewrap{flex:1;min-width:0}
 .exttl{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin-bottom:8px}
-.bubble{position:relative;background:#0e1826;border:1px solid var(--line);border-radius:16px;padding:16px 18px;min-height:130px;font-size:16px;line-height:1.85;direction:rtl;text-align:right}
+.bubble{position:relative;background:#0e1826;border:1px solid var(--line);border-radius:16px;padding:16px 18px;min-height:130px;font-size:16px;line-height:1.7;direction:ltr;text-align:left}
 .bubble:after{content:"";position:absolute;inset-inline-start:-11px;top:38px;border:11px solid transparent;border-inline-end-color:#0e1826}
 .exctl{display:flex;gap:10px;margin-top:16px;flex-wrap:wrap}
 .exctl button{font-family:var(--sans);font-size:14px;font-weight:700;border:none;border-radius:11px;padding:12px 15px;cursor:pointer}
@@ -198,37 +198,32 @@
 </style>
 <div class="modal on" id="intro"><div class="card2">
   <div class="exwrap">
-    <div class="avatar"><svg viewBox="0 0 200 240" aria-label="Saudi guide">
-      <defs><pattern id="shem" width="13" height="13" patternUnits="userSpaceOnUse"><rect width="13" height="13" fill="#e8433a"/><path d="M0 6.5H13M6.5 0V13" stroke="#c9312b" stroke-width="1.5"/><path d="M0 0l13 13M13 0l-13 13" stroke="#fff" stroke-width="0.9" opacity=".45"/></pattern></defs>
+    <div class="avatar"><svg viewBox="0 0 200 240" aria-label="Arab guide">
       <path d="M38 240 Q40 176 100 168 Q160 176 162 240 Z" fill="#f4f6f8" stroke="#d5dbe2" stroke-width="1.5"/>
       <path d="M100 168 L89 214 H111 Z" fill="#e7ebf0"/>
       <rect x="88" y="150" width="24" height="26" rx="8" fill="#d9a679"/>
-      <path d="M52 72 Q38 152 62 178 L138 178 Q162 152 148 72 Z" fill="url(#shem)" stroke="#b62c26" stroke-width="1.5"/>
-      <ellipse cx="100" cy="98" rx="42" ry="46" fill="#eac093"/>
-      <ellipse cx="58" cy="102" rx="7" ry="11" fill="#e2b184"/><ellipse cx="142" cy="102" rx="7" ry="11" fill="#e2b184"/>
-      <path d="M58 62 Q38 122 66 152 L76 152 Q56 112 80 68 Z" fill="url(#shem)" stroke="#b62c26" stroke-width="1.2"/>
-      <path d="M142 62 Q162 122 134 152 L124 152 Q144 112 120 68 Z" fill="url(#shem)" stroke="#b62c26" stroke-width="1.2"/>
-      <path d="M55 70 Q100 40 145 70 Q100 52 55 70 Z" fill="url(#shem)" stroke="#b62c26" stroke-width="1"/>
-      <path d="M56 68 Q100 46 144 68 L144 78 Q100 58 56 78 Z" fill="url(#shem)"/>
-      <ellipse cx="100" cy="60" rx="47" ry="12" fill="none" stroke="#141414" stroke-width="6"/>
-      <ellipse cx="100" cy="69" rx="46" ry="11" fill="none" stroke="#0b0b0b" stroke-width="5"/>
-      <path d="M74 87 q10 -6 20 -1" stroke="#3a2a1c" stroke-width="3.4" fill="none" stroke-linecap="round"/>
-      <path d="M106 86 q10 -5 20 1" stroke="#3a2a1c" stroke-width="3.4" fill="none" stroke-linecap="round"/>
-      <ellipse cx="84" cy="99" rx="6.6" ry="4.5" fill="#fff"/><ellipse cx="116" cy="99" rx="6.6" ry="4.5" fill="#fff"/>
-      <circle cx="84" cy="99" r="2.9" fill="#26170e"/><circle cx="116" cy="99" r="2.9" fill="#26170e"/>
-      <ellipse id="lidL" cx="84" cy="99" rx="7.2" ry="0" fill="#eac093"/><ellipse id="lidR" cx="116" cy="99" rx="7.2" ry="0" fill="#eac093"/>
-      <path d="M100 101 q-4 12 -6 16 q3 3 12 0" fill="none" stroke="#c99568" stroke-width="2.6" stroke-linecap="round"/>
-      <path d="M78 128 q22 12 44 0 q-7 9 -22 9 q-15 0 -22 -9Z" fill="#2c2018"/>
-      <path d="M68 118 Q100 152 132 118 Q134 152 100 158 Q66 152 68 118Z" fill="#33271d" opacity=".9"/>
-      <ellipse id="mouth" cx="100" cy="136" rx="9" ry="1.2" fill="#7a2f2c"/>
+      <ellipse cx="58" cy="104" rx="7" ry="11" fill="#e2b184"/><ellipse cx="142" cy="104" rx="7" ry="11" fill="#e2b184"/>
+      <ellipse cx="100" cy="100" rx="42" ry="46" fill="#eac093"/>
+      <path d="M59 98 Q53 54 100 51 Q147 54 141 98 Q137 76 118 68 Q100 62 82 68 Q63 76 59 98 Z" fill="#241a13"/>
+      <path d="M60 98 q-3 16 3 24 q6 -3 6 -15 Z" fill="#241a13"/>
+      <path d="M140 98 q3 16 -3 24 q-6 -3 -6 -15 Z" fill="#241a13"/>
+      <path d="M74 90 q10 -6 20 -1" stroke="#2f2114" stroke-width="3.4" fill="none" stroke-linecap="round"/>
+      <path d="M106 89 q10 -5 20 1" stroke="#2f2114" stroke-width="3.4" fill="none" stroke-linecap="round"/>
+      <ellipse cx="84" cy="102" rx="6.6" ry="4.5" fill="#fff"/><ellipse cx="116" cy="102" rx="6.6" ry="4.5" fill="#fff"/>
+      <circle cx="84" cy="102" r="2.9" fill="#26170e"/><circle cx="116" cy="102" r="2.9" fill="#26170e"/>
+      <ellipse id="lidL" cx="84" cy="102" rx="7.2" ry="0" fill="#eac093"/><ellipse id="lidR" cx="116" cy="102" rx="7.2" ry="0" fill="#eac093"/>
+      <path d="M100 104 q-4 12 -6 16 q3 3 12 0" fill="none" stroke="#c99568" stroke-width="2.6" stroke-linecap="round"/>
+      <path d="M78 131 q22 12 44 0 q-7 9 -22 9 q-15 0 -22 -9Z" fill="#2c2018"/>
+      <path d="M68 121 Q100 155 132 121 Q134 156 100 162 Q66 156 68 121Z" fill="#33271d" opacity=".9"/>
+      <ellipse id="mouth" cx="100" cy="139" rx="9" ry="1.2" fill="#7a2f2c"/>
     </svg></div>
     <div class="bubblewrap">
-      <div class="exttl">&#127480;&#127462; دليلك · SADE-IoV</div>
-      <div class="bubble" id="bubble" dir="rtl">هلا وغلا! اضغط «شغّل الشرح» وأشرح لك المشروع بصوتي 👇</div>
+      <div class="exttl">&#129492; Your guide · SADE-IoV</div>
+      <div class="bubble" id="bubble" dir="ltr">Hi there! Press “Play intro” and I will explain the project out loud 👇</div>
       <div class="exctl">
-        <button class="play" id="ex_play">&#9654; شغّل الشرح</button>
-        <button class="mute" id="ex_mute" title="الصوت">&#128266;</button>
-        <button class="start" id="ex_start">تخطّي ⏭</button>
+        <button class="play" id="ex_play">&#9654; Play intro</button>
+        <button class="mute" id="ex_mute" title="Voice">&#128266;</button>
+        <button class="start" id="ex_start">Skip ⏭</button>
       </div>
     </div>
   </div>
@@ -447,25 +442,25 @@ $('rp_new').onclick=function(){$('modal').classList.remove('on');startTrip(durMi
 var introOpen=true,muted=false,li=0,lineTimer=null,talking=false,tw=null;
 var mouthEl=$('mouth'),lidL=$('lidL'),lidR=$('lidR');
 var LINES=[
- 'هلا والله! أنا دليلك، وبشرح لك مشروع «سادِي آي أو في» بأبسط طريقة.',
- 'هذا برنامج أمان يشتغل جوّه وحدة الاتصال في السيارة — مو نظام قيادة.',
- 'السيارة تستقبل رسائل من السيارات اللي حولها ومن الطريق، وأنا أراقب أي هجوم.',
- 'لما الطريق آمن أستخدم تشفير خفيف وسريع، ولما يجي هجوم أرفع الحماية تلقائيًا.',
- 'يلا! اختر مدة الرحلة واضغط ابدأ، وتابع اللوحة اليسار تشرح لك كل شي.'
+ 'Hi! I am your guide. Let me explain the SADE-IoV project in the simplest way.',
+ 'SADE-IoV is security software that runs inside the car communication unit — it does not drive the car.',
+ 'The car keeps receiving V2X messages from nearby cars and the road, while I watch for any attack.',
+ 'On a safe road I use light, fast encryption; the moment an attack appears I raise the protection automatically.',
+ 'Now pick a trip length and press Start, and watch the left panel explain everything.'
 ];
 function charAnim(now){if(mouthEl){var ry=talking?(2+3.2*Math.abs(Math.sin(now/95))):1.2;mouthEl.setAttribute('ry',ry.toFixed(1));}requestAnimationFrame(charAnim);}
 requestAnimationFrame(charAnim);
 setInterval(function(){if(introOpen&&lidL){lidL.setAttribute('ry','8');lidR.setAttribute('ry','8');setTimeout(function(){lidL.setAttribute('ry','0');lidR.setAttribute('ry','0');},130);}},3400);
 function typew(text){var b=$('bubble');clearInterval(tw);b.textContent='';var i=0;tw=setInterval(function(){b.textContent=text.slice(0,++i);if(i>=text.length)clearInterval(tw);},26);}
-function speak(text){try{if(muted||!window.speechSynthesis)return;var u=new SpeechSynthesisUtterance(text);var vs=speechSynthesis.getVoices(),ar=null;for(var i=0;i<vs.length;i++){if(/^ar/i.test(vs[i].lang)){ar=vs[i];break;}}u.lang=ar?ar.lang:'ar-SA';if(ar)u.voice=ar;u.rate=0.95;speechSynthesis.cancel();speechSynthesis.speak(u);}catch(e){}}
+function speak(text){try{if(muted||!window.speechSynthesis)return;var u=new SpeechSynthesisUtterance(text);var vs=speechSynthesis.getVoices(),en=null;for(var i=0;i<vs.length;i++){if(/^en/i.test(vs[i].lang)){en=vs[i];break;}}u.lang=en?en.lang:'en-US';if(en)u.voice=en;u.rate=0.98;speechSynthesis.cancel();speechSynthesis.speak(u);}catch(e){}}
 function playLine(){if(!introOpen)return;
-  if(li>=LINES.length){talking=false;typew('يلا نبدأ 👇');$('ex_play').style.display='none';$('ex_start').textContent='🚀 ابدأ الرحلة';return;}
+  if(li>=LINES.length){talking=false;typew('Ready — press Start below 👇');$('ex_play').style.display='none';$('ex_start').textContent='🚀 Start the trip';return;}
   var tx=LINES[li];typew(tx);speak(tx);talking=true;
   var dur=Math.max(2800,Math.min(6800,tx.length*85));
   clearTimeout(lineTimer);lineTimer=setTimeout(function(){talking=false;li++;setTimeout(playLine,300);},dur);}
-function startNarration(){li=0;introOpen=true;$('ex_play').textContent='⏭️ التالي';$('ex_play').onclick=function(){clearTimeout(lineTimer);talking=false;li++;playLine();};playLine();}
+function startNarration(){li=0;introOpen=true;$('ex_play').textContent='⏭️ Next';$('ex_play').onclick=function(){clearTimeout(lineTimer);talking=false;li++;playLine();};playLine();}
 function closeIntro(){introOpen=false;talking=false;try{window.speechSynthesis&&speechSynthesis.cancel();}catch(e){}clearTimeout(lineTimer);clearInterval(tw);$('intro').classList.remove('on');}
-function openIntro(){introOpen=true;li=0;talking=false;$('intro').classList.add('on');$('ex_play').style.display='';$('ex_play').textContent='▶ شغّل الشرح';$('ex_play').onclick=startNarration;$('ex_start').textContent='تخطّي ⏭';typew('هلا وغلا! اضغط «شغّل الشرح» وأشرح لك المشروع بصوتي 👇');}
+function openIntro(){introOpen=true;li=0;talking=false;$('intro').classList.add('on');$('ex_play').style.display='';$('ex_play').textContent='▶ Play intro';$('ex_play').onclick=startNarration;$('ex_start').textContent='Skip ⏭';typew('Hi there! Press “Play intro” and I will explain the project out loud 👇');}
 $('ex_play').onclick=startNarration;
 $('ex_start').onclick=closeIntro;
 $('ex_mute').onclick=function(){muted=!muted;this.textContent=muted?'🔇':'🔊';if(muted){try{speechSynthesis.cancel();}catch(e){}}};
