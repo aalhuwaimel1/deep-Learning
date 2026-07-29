@@ -65,7 +65,7 @@ class RiskEngine:
         joblib.dump(self.scaler, config.SCALER_PATH)
 
     @classmethod
-    def load(cls) -> "RiskEngine":
+    def load(cls) -> RiskEngine:
         clf = XGBClassifier()
         clf.load_model(config.MODEL_PATH)
         reg = XGBRegressor()
@@ -101,7 +101,6 @@ def train_risk_engine(
     # Standardise telemetry features (Table 7).
     scaler = StandardScaler().fit(X_tr)
     X_tr_s = scaler.transform(X_tr)
-    X_te_s = scaler.transform(X_te)
 
     clf = XGBClassifier(
         num_class=len(config.PROFILES),

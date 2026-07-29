@@ -84,7 +84,7 @@ def load_veremi(root: str, max_files: int | None = None, window: int = 10) -> pd
 
     rows = []
     for fp in files:
-        speeds, times, recs = [], [], []
+        recs = []
         with open(fp) as fh:
             for line in fh:
                 line = line.strip()

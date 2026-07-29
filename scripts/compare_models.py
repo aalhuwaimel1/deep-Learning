@@ -13,10 +13,8 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import os
 
-import numpy as np
 from sklearn.model_selection import train_test_split
 
 from sade_iov import config, datasets
