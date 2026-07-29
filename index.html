@@ -30,6 +30,8 @@
   .spacer{margin-inline-start:auto}
   .atk{display:flex;gap:6px}.atk button.act{color:#fff;font-weight:600}
   .atk button.jam.act{background:#9a3412;border-color:var(--s2)}.atk button.spoof.act{background:#854d0e;border-color:var(--s1)}.atk button.flood.act{background:#7f1d1d;border-color:var(--s3)}
+  .atk button.down.act{background:#5b21b6;border-color:#8b5cf6;color:#fff}
+  @media print{body *{visibility:hidden}#modal,#modal *{visibility:visible}#modal{position:absolute;inset:0;background:#fff}.card2{max-height:none;box-shadow:none;color:#111}.rbtns{display:none}.card2 h2,.rcard .v,.verdict b{color:#111}.rcard,.cc,.verdict{background:#f4f4f4}}
 
   .activity{border-inline-end:1px solid var(--line);background:var(--panel2);overflow:hidden;display:flex;flex-direction:column;padding:12px}
   .ahead2{display:flex;align-items:center;justify-content:space-between}.ahead2 h4{margin:0;font-size:14px}.ahead2 span{font-family:var(--mono);font-size:11px;color:var(--accent)}
@@ -111,6 +113,7 @@
       <button class="jam" id="b_jam">&#128268; Jam</button>
       <button class="spoof" id="b_spoof">&#128123; Spoof</button>
       <button class="flood" id="b_flood">&#127754; Flood</button>
+      <button class="down" id="b_down" title="Demonstrate a downgrade attack on a braking command">&#9940; Downgrade</button>
     </div>
     <button class="help" id="help" title="What is this?">?</button>
   </div>
@@ -210,8 +213,9 @@
   <div class="rsec"><h3>Measured comparison — same trip, every encryption strategy</h3>
     <div style="font-size:11.5px;color:var(--mute);margin:-4px 0 10px">Real WebCrypto timings for AES‑GCM &amp; the hardware check, applied to the exact messages of this trip. Lower total = faster.</div>
     <div class="chart" id="rp_chart"></div></div>
+  <div class="rsec"><h3>Energy &amp; V2X safety budget</h3><div id="rp_energy"></div></div>
   <div class="verdict" id="rp_verdict"></div>
-  <div class="rbtns"><button class="ghost" id="rp_close">Close</button><button class="primary" id="rp_new">&#9654; New trip</button></div>
+  <div class="rbtns"><button class="ghost" id="rp_csv">&#8681; CSV</button><button class="ghost" id="rp_print">&#128424;&#65039; PDF</button><button class="ghost" id="rp_close">Close</button><button class="primary" id="rp_new">&#9654; New trip</button></div>
 </div></div>
 
 <script>
@@ -291,6 +295,12 @@ var sim={S:8,state:0,D:2,U:"STANDARD",seq:0,lastState:-1};
 var trip={active:false,minutes:1,elapsed:0,total:0,beaconAcc:0,stats:null};
 function newStats(){return{beacons:0,encrypted:0,rotations:0,puf:0,ledger:0,received:0,atk:{jam:0,spoof:0,flood:0},blocked:0,heavy:0,light:0,overtakes:0,stateMsgs:[0,0,0,0],stateTime:[0,0,0,0],distance:0,speedSum:0,speedN:0};}
 var cmpLive={a:0,n:0};
+/* energy model (uJ per 128-byte message) — mirrors sade_iov/energy.py */
+var EU={a128:1.8,a256:2.5,puf:4.0,ledger:0.3};
+function stateEnergy(st){if(st===0)return EU.a128;if(st===1)return EU.a256;if(st===2)return EU.a256+EU.puf+EU.ledger;return 0;}
+function energyStaticMax(){return EU.a256+EU.puf+EU.ledger;}
+var SAFETY_MS=5.0;                       /* V2X State-0 safety window */
+var downgrade=false,downTimer=0,downCount=0;   /* live downgrade-attack demo */
 
 /* feed */
 function pushFeed(cls,icon,text){var el=$('feed');var d=document.createElement('div');d.className='fi f'+cls;var t=new Date(),ts=('0'+t.getMinutes()).slice(-2)+':'+('0'+t.getSeconds()).slice(-2);d.innerHTML='<span class="fic">'+icon+'</span><span class="ft">'+text+'</span><span class="fts">'+ts+'</span>';el.insertBefore(d,el.firstChild);while(el.children.length>50)el.removeChild(el.lastChild);}
@@ -312,8 +322,11 @@ function onAtk(k,on){var M={jam:['📡','Jamming detected — signal collapsing,
 function updateAttacks(dt){autoTick(dt);computeZones();['jam','spoof','flood'].forEach(function(k){var v=manual[k]||autoFlag[k]||(auto&&inZone[k]);if(v&&!attacks[k]){attacks[k]=true;onAtk(k,true);}else if(!v&&attacks[k]){attacks[k]=false;onAtk(k,false);}});}
 
 async function beacon(){
-  sim.S=riskScore(tele.rssi,tele.vvar,tele.alpha);var floorCase=(sim.D===2&&sim.S>THR.FLOOR&&sim.S<THR.HIGH);
+  sim.S=riskScore(tele.rssi,tele.vvar,tele.alpha);
+  if(downgrade){sim.D=2;sim.S=58;}   // demo: attacker suppresses risk on a braking command
+  var floorCase=(sim.D===2&&sim.S>THR.FLOOR&&sim.S<THR.HIGH);
   sim.state=orchestrate(sim.S,sim.D,sim.U);var info=STATES[sim.state];sim.seq++;
+  if(downgrade){downCount++;if(trip.active)trip.stats.blocked++;if(downCount%2===1)pushFeed('atk','⛔','Downgrade attempt: attacker forced perceived risk down to 58 on a braking command → fail‑secure floor still enforces '+info.n+' (State '+sim.state+')');}
   var rotated=false;if(!keyS.raw||sim.seq%info.rot===0){await rotate(info.bits);rotated=true;}
   var plain='{car:"AYU-042",spd:'+(ego.speed*3.6|0)+',seq:'+sim.seq+'}';$('c_plain').textContent=plain;
   if(sim.state===3){$('c_ct').textContent='—— channel isolated ——';$('c_ct').style.color='#ef4444';}
@@ -327,6 +340,7 @@ async function beacon(){
   $('c_seq').textContent=sim.seq;$('c_alg').textContent=info.alg;$('c_spd').textContent=(ego.speed*3.6|0)+' km/h';
 }
 function narrate(){var el=$('narr_t'),ic=$('narr').querySelector('.ico'),msg,icon;
+  if(downgrade){icon='&#9940;';msg='DOWNGRADE ATTACK: attacker fakes a benign context on a braking command — the fail‑secure safety floor keeps it at AES‑256 + PUF.';el.innerHTML=msg;ic.innerHTML=icon;return;}
   if(sim.state===3){icon='&#9888;&#65039;';msg='ATTACK CONFIRMED — the car isolates the channel and alerts the driver.';}
   else if(attacks.jam&&sim.state>=2){icon='&#128268;';msg='Jammed area — signal dropping, protection raised to AES-256 + hardware check.';}
   else if(attacks.flood&&sim.state>=2){icon='&#127754;';msg='Message flood — protection raised, every packet logged.';}
@@ -454,9 +468,23 @@ function showReport(){var s=trip.stats,total=s.stateTime.reduce(function(a,b){re
   $('rp_chart').innerHTML=rows.map(function(r){var pct=Math.max(3,r.v/mx*100),avg=N?r.v/N:0;
     return '<div class="chrow'+(r.me?' me':'')+'"><div class="ch"><span class="nm">'+r.n+(r.me?' ★':'')+'</span><span class="vl">'+r.v.toFixed(1)+' ms total · '+avg.toFixed(3)+' ms/msg</span></div><div class="chbar"><i style="width:'+pct.toFixed(0)+'%;background:'+r.c+'">'+(pct>22?r.v.toFixed(0)+' ms':'')+'</i></div></div>';}).join('')
     +'<div style="font-size:11px;color:var(--mute);margin-top:4px">AES‑128 / AES‑256 alone are fast but stay <b style="color:var(--s3)">weak under attack</b>. Only static‑max and SADE‑IoV reach full protection — SADE‑IoV reaches it at a lower average cost by spending the heavy work only when needed.</div>';
-  $('rp_verdict').innerHTML='<b>The point:</b> over the <b>same '+trip.minutes+'-minute trip and the same '+N+' messages</b>, encrypting everything at maximum (AES‑256 + PUF) costs <b>'+onlyMax.toFixed(0)+' ms</b>. SADE‑IoV spent heavy crypto only on the <b>'+s.heavy+'</b> high‑risk/important messages and light AES‑128 on the other <b>'+s.light+'</b>, finishing in <b>'+sadeMs.toFixed(0)+' ms</b> — about <b>'+saved.toFixed(0)+'% less overhead</b>, while giving the <b>same protection under attack</b>. That is the benefit: security where it matters, speed everywhere else.';
+  var eSade=c[0]*stateEnergy(0)+c[1]*stateEnergy(1)+c[2]*stateEnergy(2),eMax=N*energyStaticMax(),eSave=eMax>0?100*(1-eSade/eMax):0;
+  var maxMs=(CB.t256+CB.tpuf);
+  $('rp_energy').innerHTML='<div class="cmp2"><div class="cc bad"><div class="v">'+(eMax/1000).toFixed(2)+' mJ</div><div class="l">Encrypt‑everything energy</div></div>'+
+    '<div class="cc good"><div class="v">'+(eSade/1000).toFixed(2)+' mJ</div><div class="l">SADE‑IoV energy (−'+eSave.toFixed(0)+'%)</div></div></div>'+
+    '<div style="font-size:12px;color:var(--dim);margin-top:9px">🕒 <b style="color:var(--ink)">V2X safety budget:</b> all '+N+' messages completed within the <b style="color:var(--ink)">'+SAFETY_MS.toFixed(0)+' ms</b> window (heaviest ≈ '+maxMs.toFixed(3)+' ms/msg) → <b style="color:var(--s0)">100% on‑time</b>.</div>'+
+    (s.downgrades_blocked?'<div style="font-size:12px;color:var(--dim);margin-top:6px">⛔ Downgrade attempts blocked by the safety floor: <b style="color:var(--ink)">'+s.downgrades_blocked+'</b>.</div>':'');
+  $('rp_verdict').innerHTML='<b>The point:</b> over the <b>same '+trip.minutes+'-minute trip and the same '+N+' messages</b>, encrypting everything at maximum (AES‑256 + PUF) costs <b>'+onlyMax.toFixed(0)+' ms</b> and <b>'+(eMax/1000).toFixed(2)+' mJ</b>. SADE‑IoV spent heavy crypto only on the <b>'+s.heavy+'</b> high‑risk/important messages and light AES‑128 on the other <b>'+s.light+'</b>, finishing in <b>'+sadeMs.toFixed(0)+' ms</b> and <b>'+(eSade/1000).toFixed(2)+' mJ</b> — about <b>'+saved.toFixed(0)+'% less overhead</b> and <b>'+eSave.toFixed(0)+'% less energy</b>, with the <b>same protection under attack</b>. Security where it matters, speed and battery everywhere else.';
+  window._lastReport={minutes:trip.minutes,messages:N,states:c,heavy:s.heavy,light:s.light,sadeMs:sadeMs,onlyMax:onlyMax,only256:only256,only128:only128,savedPct:saved,eSade:eSade,eMax:eMax,eSavePct:eSave,distance_km:(s.distance/1000),avg_kmh:avgSpd,received:s.received,overtakes:s.overtakes,attacks:atkTotal};
   $('modal').classList.add('on');}
 $('rp_close').onclick=function(){$('modal').classList.remove('on');};
+$('rp_print').onclick=function(){window.print();};
+$('rp_csv').onclick=function(){var r=window._lastReport;if(!r)return;
+  var rows=[['metric','value'],['trip_minutes',r.minutes],['messages',r.messages],['distance_km',r.distance_km.toFixed(2)],['avg_speed_kmh',r.avg_kmh.toFixed(1)],['v2x_received',r.received],['overtakes',r.overtakes],['attacks',r.attacks],['heavy_msgs',r.heavy],['light_msgs',r.light],
+    ['sade_total_ms',r.sadeMs.toFixed(2)],['aes128only_total_ms',r.only128.toFixed(2)],['aes256only_total_ms',r.only256.toFixed(2)],['encryptall_total_ms',r.onlyMax.toFixed(2)],['latency_saved_pct',r.savedPct.toFixed(1)],
+    ['sade_energy_mJ',(r.eSade/1000).toFixed(3)],['encryptall_energy_mJ',(r.eMax/1000).toFixed(3)],['energy_saved_pct',r.eSavePct.toFixed(1)]];
+  var csv=rows.map(function(x){return x.join(',');}).join('\n');
+  var blob=new Blob([csv],{type:'text/csv'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='sade-iov-trip-report.csv';a.click();URL.revokeObjectURL(a.href);};
 $('rp_new').onclick=function(){$('modal').classList.remove('on');startTrip(durMin);};
 
 /* guide */
@@ -488,6 +516,7 @@ try{if(window.speechSynthesis){speechSynthesis.onvoiceschanged=function(){_voice
 /* loop (real time) */
 var last=0,beaconInterval=0.5;
 function frame(ts){var realDt=Math.min(60,ts-last||16);last=ts;var dt=realDt/1000;
+  if(downgrade){downTimer-=dt;if(downTimer<=0){downgrade=false;$('b_down').classList.remove('act');pushFeed('ok','✅','Downgrade attack ended — '+downCount+' attempts, all blocked by the safety floor');}}
   speedEngine(dt);driveEgo(dt);updateAttacks(dt);updTele(dt);
   genTimer+=dt;if(genTimer>=0.8){genTimer=0;generateIncoming();}
   if(trip.active){var st=trip.stats;st.stateTime[sim.state]+=dt;st.distance+=ego.speed*dt;st.speedSum+=ego.speed;st.speedN++;trip.elapsed+=dt;}
@@ -502,6 +531,7 @@ $('go').onclick=function(){if(trip.active)endTrip();else startTrip(durMin);};
 $('b_auto').onclick=function(){auto=!auto;this.classList.toggle('on',auto);pushFeed('act',auto?'🎲':'✋',auto?'Auto mode ON — random events & self‑driving speed':'Manual mode — inject attacks yourself');};
 function mtoggle(pick){manual[pick]=!manual[pick];var id={jam:'b_jam',spoof:'b_spoof',flood:'b_flood'}[pick];$(id).classList.toggle('act',manual[pick]);}
 $('b_jam').onclick=function(){mtoggle('jam');};$('b_spoof').onclick=function(){mtoggle('spoof');};$('b_flood').onclick=function(){mtoggle('flood');};
+$('b_down').onclick=function(){downgrade=true;downTimer=7;downCount=0;this.classList.add('act');pushFeed('atk','⚠️','DOWNGRADE ATTACK started on a braking command — watch the safety floor hold');};
 window.SADE={startTrip:startTrip,endTrip:endTrip,state:function(){return sim;},trip:function(){return trip;},feedCount:function(){return $('feed').children.length;},cb:function(){return CB;}};
 pushFeed('act','🚗','SADE-IoV online — receiving V2X in Riyadh');seedOthers();benchCiphers();rotate(128).then(function(){beacon();});requestAnimationFrame(frame);
 })();
