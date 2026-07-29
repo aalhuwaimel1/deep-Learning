@@ -78,6 +78,54 @@ Generated models, figures and the JSON report are written to `artifacts/`.
 5. Execute the corresponding cryptographic primitives and record timing + state.
 6. Aggregate metrics and compare against a static maximum-security baseline.
 
+## Datasets
+
+The risk engine trains on a **unified feature schema** (`R_RSSI, V_var, alpha_freq,
+D_class, label`) that any source can populate — see `sade_iov/datasets.py`.
+
+| Source | Year | Size (this build) | What it covers |
+|--------|------|-------------------|----------------|
+| **Synthetic generator** | — | **10,000 epochs** (8,000 train / 2,000 test), 44.8% attacks | Channel-level jamming / injection / spoofing with boundary noise |
+| **VeReMi** + extension | 2018 / 2020 | download-on-demand | V2X position-falsification misbehaviour (VEINS/SUMO) |
+| **CICIoV2024** | 2024 | download-on-demand | In-vehicle CAN-bus spoofing / DoS (UNB CIC) |
+
+The synthetic set ships in-repo and runs out of the box. The two public
+benchmarks are large, so they are downloaded on demand:
+
+```bash
+python -m scripts.fetch_datasets            # shows sources + where to place files
+# place VeReMi under data/veremi/ and CICIoV2024 under data/ciciov2024/, then:
+python -m scripts.compare_models --dataset all
+```
+
+`sade_iov/datasets.py` provides `load_synthetic()`, `load_veremi(path)` and
+`load_ciciov2024(path)`, each returning the unified schema so they can be mixed
+freely with `datasets.combine(...)`.
+
+## Multiple models (not just XGBoost)
+
+`scripts/compare_models.py` trains six classifiers on the same partition and
+ranks them by attack recall (the safety-critical metric), then macro-F1:
+
+```bash
+python -m scripts.compare_models          # synthetic dataset
+```
+
+Representative run (synthetic, seed 42):
+
+| Model | Accuracy | Attack recall | Macro F1 | Train (s) | Infer (ms/sample) |
+|-------|----------|---------------|----------|-----------|-------------------|
+| MLP | 0.977 | 0.963 | 0.973 | 1.04 | 0.0015 |
+| RandomForest | 0.977 | 0.962 | 0.972 | 0.70 | 0.040 |
+| **XGBoost** | 0.975 | 0.962 | 0.970 | **0.19** | **0.0023** |
+| LogisticRegression | 0.973 | 0.952 | 0.969 | 0.02 | 0.0001 |
+| SVM (RBF) | 0.972 | 0.952 | 0.967 | 0.10 | 0.016 |
+| ExtraTrees | 0.971 | 0.944 | 0.967 | 0.43 | 0.039 |
+
+XGBoost matches the top models on recall/F1 while training fastest and keeping
+inference among the cheapest — which is exactly why the report selects it for
+constrained edge OBUs.
+
 ## Evaluation (Chapter 6)
 
 `scripts/run_simulation.py` reports:

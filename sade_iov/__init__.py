@@ -9,15 +9,17 @@ the GP1 design report:
 
 Plus a full simulation workflow (simulation) and evaluation suite (evaluation).
 """
-from . import config, crypto_exec, data_generator, decision_logic, evaluation
-from . import risk_engine, simulation
+from . import config, crypto_exec, data_generator, datasets, decision_logic
+from . import evaluation, models, risk_engine, simulation
 
 __all__ = [
     "config",
     "crypto_exec",
     "data_generator",
+    "datasets",
     "decision_logic",
     "evaluation",
+    "models",
     "risk_engine",
     "simulation",
 ]
