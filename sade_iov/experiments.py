@@ -259,6 +259,91 @@ def fig_latency_cdf(seed: int, n_epochs: int, path: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Three-solutions comparison on both an existing (VeReMi-style) and a
+# generated (synthetic) dataset, each with a train/test split.
+# ---------------------------------------------------------------------------
+LAT_MS = {0: 0.12, 1: 0.16, 2: 0.30, 3: 0.0}   # per-state processing latency
+SOLUTIONS = [
+    ("sade", "SADE-IoV (adaptive)"),
+    ("strong", "Static strong (AES-256+PUF)"),
+    ("light", "Static light (AES-128 only)"),
+]
+
+
+def three_solutions(df, seed: int = config.DEFAULT_SEED) -> dict:
+    """Train/test a risk engine on ``df`` and compare three security solutions."""
+    engine, parts = train_risk_engine(df, seed=seed)
+    metrics = evaluate_risk_engine(engine, parts)
+    test = df.iloc[parts["idx_test"]].reset_index(drop=True)
+    S = engine.predict_risk(test[config.FEATURES].to_numpy(float))
+    dcl = test["D_class"].to_numpy()
+    atk = test["is_attack"].to_numpy().astype(bool)
+    n = len(test)
+
+    def states_for(kind):
+        if kind == "sade":
+            return np.array([execute_security_orchestration(float(S[i]), int(dcl[i])) for i in range(n)])
+        if kind == "strong":
+            return np.full(n, config.STATE_2_HIGH)
+        return np.full(n, config.STATE_0_LOW)
+
+    sols = {}
+    for key, name in SOLUTIONS:
+        st = states_for(key)
+        sols[name] = {
+            "mean_latency_ms": float(np.mean([LAT_MS[int(s)] for s in st])),
+            "mean_energy_uj": float(np.mean([energy.energy_for_state(int(s)).total_uj for s in st])),
+            "attack_response_pct": float(np.mean(st[atk] >= config.STATE_1_MEDIUM) * 100) if atk.any() else 0.0,
+        }
+    return {
+        "train_n": int(len(parts["y_cls_train"])),
+        "test_n": n,
+        "attack_ratio": float(df["is_attack"].mean()),
+        "classifier": {"accuracy": metrics["accuracy"],
+                       "attack_recall": metrics["attack_detection_recall"],
+                       "f1_macro": metrics["f1_macro"]},
+        "solutions": sols,
+    }
+
+
+def compare_datasets(seed: int = config.DEFAULT_SEED, n_epochs: int = config.N_EPOCHS) -> dict:
+    """Run the three-solutions comparison on the generated and existing datasets."""
+    from .datasets import synthesize_veremi_like
+
+    gen = generate_dataset(n_epochs=n_epochs, seed=seed)          # generated (synthetic)
+    ver = synthesize_veremi_like(n_epochs=n_epochs, seed=seed)     # existing-style (VeReMi)
+    return {
+        "Generated (synthetic)": three_solutions(gen, seed),
+        "Existing (VeReMi-style)": three_solutions(ver, seed),
+    }
+
+
+def fig_solutions(cmp: dict, path: str) -> str:
+    plt = _plt()
+    names = [n for _, n in SOLUTIONS]
+    short = ["SADE-IoV\n(adaptive)", "Static strong\n(AES-256+PUF)", "Static light\n(AES-128)"]
+    cols = ["#2ca02c", "#c44e52", "#eab308"]
+    dsets = list(cmp.keys())
+    fig, axes = plt.subplots(1, len(dsets), figsize=(11, 4.6), sharey=True)
+    for ax, dname in zip(axes, dsets):
+        sols = cmp[dname]["solutions"]
+        lat = [sols[n]["mean_latency_ms"] for n in names]
+        ax.bar(short, lat, color=cols)
+        for i, n in enumerate(names):
+            ax.text(i, lat[i], f"{sols[n]['attack_response_pct']:.0f}% safe\n{sols[n]['mean_energy_uj']:.1f} µJ",
+                    ha="center", va="bottom", fontsize=8)
+        c = cmp[dname]["classifier"]
+        ax.set_title(f"{dname}\nrisk engine acc {c['accuracy']:.3f} · recall {c['attack_recall']:.3f}",
+                     fontsize=10)
+        ax.set_ylabel("mean latency (ms)")
+        ax.set_ylim(0, max(lat) * 1.35)
+    fig.suptitle("Three solutions compared — same trip, per dataset (labels: attack coverage · energy)",
+                 fontsize=12)
+    fig.tight_layout(); fig.savefig(path, dpi=130); plt.close(fig)
+    return path
+
+
 def dataset_overview(seed: int = config.DEFAULT_SEED, n_epochs: int = config.N_EPOCHS) -> dict:
     """Provenance + class balance of the dataset the risk engine trains on."""
     from .datasets import describe, load_synthetic

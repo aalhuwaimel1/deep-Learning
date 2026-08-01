@@ -36,6 +36,61 @@ UNIFIED_COLS = ["R_RSSI", "V_var", "alpha_freq", "D_class", "label", "is_attack"
 
 
 # ---------------------------------------------------------------------------
+# VeReMi-style benchmark (the public dataset cited in the report, Table 6)
+# ---------------------------------------------------------------------------
+# VeReMi position-falsification attacker classes and a kinematic-variance
+# signature for each (position/speed inconsistency shows up as elevated V_var).
+_VEREMI_CLASSES = {
+    "genuine":          {"V_var": (0.5, 0.3), "risk": (5, 30)},
+    "constant_position":{"V_var": (3.0, 1.0), "risk": (55, 80)},
+    "constant_offset":  {"V_var": (4.0, 1.2), "risk": (60, 88)},
+    "random_position":  {"V_var": (7.0, 2.0), "risk": (70, 100)},
+    "random_offset":    {"V_var": (6.0, 1.8), "risk": (65, 95)},
+    "eventual_stop":    {"V_var": (2.5, 1.0), "risk": (55, 80)},
+}
+
+
+def synthesize_veremi_like(n_epochs: int = config.N_EPOCHS,
+                           seed: int = config.DEFAULT_SEED,
+                           boundary_sigma: float = 0.3) -> pd.DataFrame:
+    """Generate a VeReMi-style position-falsification dataset (report Table 6).
+
+    This reproduces the *public* VeReMi benchmark's attacker taxonomy so the
+    pipeline can be evaluated on a recognised, report-cited dataset even before
+    the multi-gigabyte archive is downloaded. Position falsification manifests
+    as kinematic-consistency anomalies, modelled here through the velocity-
+    variance feature ``V_var``; the same unified schema is returned, so the real
+    files (via :func:`load_veremi`) plug into an identical pipeline.
+    """
+    rng = np.random.default_rng(seed + 2024)
+    classes = list(_VEREMI_CLASSES.keys())
+    weights = np.array([0.55] + [0.09] * 5)
+    weights /= weights.sum()
+    chosen = rng.choice(classes, size=n_epochs, p=weights)
+
+    rows = []
+    for cls in chosen:
+        spec = _VEREMI_CLASSES[cls]
+        genuine = cls == "genuine"
+        vmu, vsd = spec["V_var"]
+        v_var = max(0.0, rng.normal(vmu, vsd) + rng.normal(0, boundary_sigma * vsd))
+        r_rssi = rng.normal(-60.0, 5.0)               # falsification does not drop RSSI
+        alpha = rng.normal(10.0, 2.0)
+        rlo, rhi = spec["risk"]
+        risk = float(np.clip(rng.uniform(rlo, rhi) + rng.normal(0, 4), 0, 100))
+        # Binary benchmark: 0 = genuine, 1 = position-falsification attacker.
+        # (The specific VeReMi class is kept in the ``profile`` column.)
+        label = 0 if genuine else 1
+        rows.append({
+            "R_RSSI": r_rssi, "V_var": v_var, "alpha_freq": alpha,
+            "D_class": int(rng.choice([0, 1, 2], p=[0.45, 0.35, 0.20])),
+            "profile": cls, "label": int(label), "is_attack": int(not genuine),
+            "risk_true": risk, "source": "veremi_like",
+        })
+    return pd.DataFrame(rows)
+
+
+# ---------------------------------------------------------------------------
 # Synthetic (always available)
 # ---------------------------------------------------------------------------
 def load_synthetic(n_epochs: int = config.N_EPOCHS, seed: int = config.DEFAULT_SEED) -> pd.DataFrame:

@@ -67,6 +67,22 @@ baseline is cheap but leaves ~42% of attacks under weak protection.
 the same messages (≈60% less); 100% of messages complete within the 5 ms
 State-0 safety window.
 
+**Two datasets × three solutions** (`python -m scripts.compare_solutions`) —
+the risk engine is trained/tested (stratified **80:20**) on both a *generated*
+(synthetic) dataset and an *existing* one (VeReMi-style, the report's cited
+benchmark), and three security solutions are compared on each:
+
+| Dataset | Risk-engine (held-out test) | SADE-IoV | Static strong | Static light |
+|---------|-----------------------------|----------|---------------|--------------|
+| Generated (synthetic) | acc 0.980 · recall 0.964 | 0.157 ms · 97% safe | 0.300 ms · 100% safe | 0.120 ms · **0% safe** |
+| Existing (VeReMi-style) | acc 0.983 · recall 0.973 | 0.153 ms · 97% safe | 0.300 ms · 100% safe | 0.120 ms · **0% safe** |
+
+SADE-IoV reaches ~97% attack coverage at ~half the latency and energy of
+encrypting everything, while a single light cipher is fast but leaves attacks
+unprotected — on **both** datasets. Figure: `artifacts/three_solutions.png`.
+The real VeReMi/CICIoV2024 files plug into the identical pipeline via
+`scripts/fetch_datasets.py` + `sade_iov/datasets.py`.
+
 **Multiple models** (`scripts/compare_models.py`) — XGBoost is chosen because it
 matches the top models on recall/F1 while training fastest and keeping inference
 among the cheapest, which suits constrained edge OBUs.

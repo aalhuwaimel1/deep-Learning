@@ -102,12 +102,11 @@ def train_risk_engine(
     scaler = StandardScaler().fit(X_tr)
     X_tr_s = scaler.transform(X_tr)
 
-    clf = XGBClassifier(
-        num_class=len(config.PROFILES),
-        random_state=seed,
-        eval_metric="mlogloss",
-        **config.XGB_PARAMS,
-    )
+    # Let XGBoost infer the objective/class count from the labels so the engine
+    # works on any dataset in the unified schema — the synthetic set has 4
+    # classes, the VeReMi-style benchmark is binary.
+    clf_params = {k: v for k, v in config.XGB_PARAMS.items() if k != "objective"}
+    clf = XGBClassifier(random_state=seed, eval_metric="mlogloss", **clf_params)
     clf.fit(X_tr_s, ycls_tr)
 
     reg = XGBRegressor(
