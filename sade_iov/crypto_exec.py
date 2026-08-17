@@ -23,7 +23,7 @@ import os
 import queue
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from Crypto.Cipher import AES
 
@@ -98,7 +98,7 @@ class AsyncLedger:
     """
 
     def __init__(self):
-        self._q: "queue.Queue[dict]" = queue.Queue()
+        self._q: queue.Queue[dict] = queue.Queue()
         self._chain: list[dict] = []
         self._prev_hash = b"\x00" * 32
         self._lock = threading.Lock()

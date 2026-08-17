@@ -131,3 +131,6 @@ dmypy.json
 # SADE-IoV generated artifacts (models, figures, reports)
 artifacts/*
 !artifacts/.gitkeep
+
+# Downloaded benchmark datasets (VeReMi, CICIoV2024)
+data/
