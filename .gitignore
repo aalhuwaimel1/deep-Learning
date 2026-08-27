@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# جسد الكائن لا يُرفع: ذاكرتك أنت، على جهازك أنت.
+*.db
+*.db-wal
+*.db-shm
+.rooh/
+journal/
