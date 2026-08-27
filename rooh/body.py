@@ -243,19 +243,20 @@ class Body:
     def recall(self, query: str, limit: int = 10) -> list[Memory]:
         """يستدعي ذكرى.
 
-        FTS5 يقسّم النص عند الفراغات والرموز، والصينية واليابانية لا فراغ
-        فيها — فيصير المقطع كلّه «كلمة» واحدة، والبحث عن جزء منه يخفق.
-        لذلك نسأل عن CJK بالمطابقة الجزئية (LIKE) وهي الصحيحة هنا أصلاً،
-        ونُبقي FTS لِما يُقطَّع بالفراغ. وإن لم يجد FTS شيئاً، نجرّب LIKE
-        قبل أن نقول «لا أذكر».
+        FTS5 يقسّم النص عند الفراغات والرموز، والصينية واليابانية
+        والتايلندية والخميرية لا فراغ فيها — فيصير المقطع كلّه «كلمة»
+        واحدة، والبحث عن جزء منه يخفق. لذلك نسأل عن هذه الكتابات
+        بالمطابقة الجزئية (LIKE) وهي الصحيحة هنا أصلاً، ونُبقي FTS لِما
+        يُقطَّع بالفراغ. وإن لم يجد FTS شيئاً، نجرّب LIKE قبل أن نقول
+        «لا أذكر».
         """
-        from .lang import script_of
+        from .lang import is_continuous, script_of
 
         rows: Iterable[sqlite3.Row] = []
         q = query.strip()
         if not q:
             return []
-        use_fts = self.has_fts and script_of(q) != "cjk"
+        use_fts = self.has_fts and not is_continuous(script_of(q))
         if use_fts:
             try:
                 rows = self.conn.execute(
@@ -382,6 +383,7 @@ class Body:
             "journeys": one("SELECT COUNT(*) FROM journeys"),
             "pages": one("SELECT COUNT(*) FROM pages"),
             "memories": one("SELECT COUNT(*) FROM memories"),
+            "papers": one("SELECT COUNT(*) FROM memories WHERE kind='paper'"),
             "interests": one("SELECT COUNT(*) FROM interests"),
             "born_at": float(born[0]) if born else None,
             "by_lang": {r["lang"]: r["c"] for r in langs},

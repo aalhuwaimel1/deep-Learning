@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Optional
 
 from . import config
+from .languages import profile as language_profile
 
 DEFAULT_PERSONALITY: dict = {
     "name": "رُوح",
@@ -19,20 +20,11 @@ DEFAULT_PERSONALITY: dict = {
     "curiosity": 0.65,        # 0 = يلتزم باهتماماته، 1 = يتوه بحثاً عن الجديد
     "depth": 0.6,             # كم يتعمّق في كل صفحة قبل أن ينتقل
     "moods": ["صافٍ", "شارد", "متحفّز", "متأمّل", "مستعجل"],
-    # أوزان اللغات: احتمال أن تختار الروح كل «جنسية» في محطّتها التالية
-    "languages": {
-        "ar": 0.20,   # العربية
-        "en": 0.20,   # الإنجليزية
-        "zh": 0.14,   # الصينية
-        "ja": 0.12,   # اليابانية
-        "ru": 0.10,   # الروسية
-        "ko": 0.06,   # الكورية
-        "fr": 0.05,   # الفرنسية
-        "de": 0.05,   # الألمانية
-        "es": 0.04,   # الإسبانية
-        "fa": 0.02,   # الفارسية
-        "tr": 0.02,   # التركية
-    },
+    # كم من تجواله يقضيه في أوراق البحث بدل الويب العام (٠ = لا شيء)
+    "research_bias": 0.35,
+    # اللغات التي يتجوّل فيها. غيّرها دفعةً واحدة بـ: rooh langs --profile العالم
+    "language_profile": "متوازن",
+    "languages": language_profile("متوازن"),
     "seed_interests": ["الذكاء الاصطناعي", "التاريخ", "الفلسفة", "الفلك", "اللغات"],
     # حدود أخلاقية وتقنية للتجوّل
     "limits": {
@@ -53,6 +45,8 @@ class Personality:
     voice: str = ""
     curiosity: float = 0.65
     depth: float = 0.6
+    research_bias: float = 0.35
+    language_profile: str = "متوازن"
     moods: list[str] = field(default_factory=list)
     languages: dict[str, float] = field(default_factory=dict)
     seed_interests: list[str] = field(default_factory=list)
@@ -113,12 +107,17 @@ class Personality:
         return False
 
     def describe(self) -> str:
+        from .languages import arabic_name
+
         traits = "، ".join(self.traits)
-        langs = "، ".join(sorted(self.languages, key=self.languages.get, reverse=True)[:5])
+        top = sorted(self.languages, key=self.languages.get, reverse=True)[:6]
+        langs = "، ".join(arabic_name(c) for c in top)
         return (
             f"{self.name} — {self.essence}\n"
             f"طباعه: {traits}\n"
             f"صوته: {self.voice}\n"
-            f"فضوله: {self.curiosity:.2f} | عمقه: {self.depth:.2f}\n"
-            f"يتجوّل غالباً في: {langs}"
+            f"فضوله: {self.curiosity:.2f} | عمقه: {self.depth:.2f} | "
+            f"نزوعه للأبحاث: {self.research_bias:.2f}\n"
+            f"يتجوّل في {len(self.languages)} لغة ({self.language_profile})، "
+            f"أكثرها: {langs}"
         )

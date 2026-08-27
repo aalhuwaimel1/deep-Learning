@@ -71,7 +71,9 @@ class Destination:
     lang: str
     source: str
     title: str = ""
-    kind: str = "page"       # page | wiki | rss_item
+    kind: str = "page"       # page | wiki | rss_item | paper
+    # محتوى جاهز جاء مع نتيجة البحث، فلا نطلب الصفحة مرّة ثانية
+    payload: Optional[dict] = None
 
 
 def load_sources(path) -> dict:
@@ -113,7 +115,7 @@ def wiki_search(f: Fetcher, lang: str, query: str, limit: int = 5,
         data = f.get_json(f"{_api(lang, site)}?{params}")
     except (FetchError, json.JSONDecodeError):
         return []
-    return [item["title"] for item in data.get("query", {}).get("search", [])]
+    return [i["title"] for i in ((data.get("query") or {}).get("search") or [])]
 
 
 def wiki_random(f: Fetcher, lang: str, count: int = 3,
@@ -127,7 +129,7 @@ def wiki_random(f: Fetcher, lang: str, count: int = 3,
         data = f.get_json(f"{_api(lang, site)}?{params}")
     except (FetchError, json.JSONDecodeError):
         return []
-    return [item["title"] for item in data.get("query", {}).get("random", [])]
+    return [i["title"] for i in ((data.get("query") or {}).get("random") or [])]
 
 
 def wiki_extract(f: Fetcher, lang: str, title: str,
@@ -142,7 +144,7 @@ def wiki_extract(f: Fetcher, lang: str, title: str,
         data = f.get_json(f"{_api(lang, site)}?{params}")
     except (FetchError, json.JSONDecodeError):
         return None
-    pages = data.get("query", {}).get("pages", [])
+    pages = (data.get("query") or {}).get("pages") or []
     if not pages or pages[0].get("missing"):
         return None
     page = pages[0]
@@ -203,7 +205,7 @@ def translate_term(f: Fetcher, conn: sqlite3.Connection, term: str,
         })
         try:
             data = f.get_json(f"{_api(src_lang)}?{params}")
-            pages = data.get("query", {}).get("pages", [])
+            pages = (data.get("query") or {}).get("pages") or []
             if pages and pages[0].get("langlinks"):
                 result = pages[0]["langlinks"][0].get("title")
         except (FetchError, json.JSONDecodeError, KeyError, IndexError):

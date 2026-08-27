@@ -16,9 +16,8 @@ from dataclasses import dataclass, field
 from typing import Callable, Optional
 from urllib.parse import urlparse
 
-from . import config, senses, sources
+from . import config, research, senses, sources
 from .body import Body
-from .lang import script_of
 from .mind import Mind
 from .net import FetchError, Fetcher
 from .personality import Personality
@@ -60,6 +59,8 @@ class Wanderer:
         self._pending: dict[str, list[Destination]] = {}
         self._refills: dict[str, int] = {}      # كم مرّة ملأنا طابور كل لغة
         self._drained: set[str] = set()         # لغات استنفدنا خلاصاتها
+        self._papers: dict[str, list[Destination]] = {}   # أوراق بحث بانتظار القراءة
+        self._no_papers: set[str] = set()       # لغات لم تُجدِ فيها قواعد الأبحاث
 
     # ── الرحلة ───────────────────────────────────────────────────────────
     def journey(self, pages: Optional[int] = None,
@@ -101,8 +102,13 @@ class Wanderer:
             if self.p.is_blocked(host, title):
                 self.on_event("skip", {"url": dest.url, "why": "محجوب بشخصيته"})
                 continue
-            if not senses.looks_substantial(text):
+            # عتبة «الضحالة» للصفحات، لا للأوراق: ملخّص بحث في ٨٠٠ حرف
+            # ورقةٌ كاملة، ورفضه لأنه «قصير» يرمي أغنى ما نعود به.
+            if dest.kind != "paper" and not senses.looks_substantial(text):
                 self.on_event("skip", {"url": dest.url, "why": "نصّ ضحل"})
+                continue
+            if dest.kind == "paper" and len(text) < 120:
+                self.on_event("skip", {"url": dest.url, "why": "ورقة بلا ملخّص"})
                 continue
 
             page_lang = self._settle_lang(dest.lang, page.get("lang", ""), text)
@@ -113,10 +119,13 @@ class Wanderer:
             if page_id is None:          # سبقتنا إليها رحلة أخرى
                 continue
 
-            digested = self.mind.digest(title, text, page_lang)
+            # للورقة: نهضم عنوانها وملخّصها، لا بياناتها الوصفية
+            to_digest = (dest.payload or {}).get("content") or text
+            digested = self.mind.digest(title, to_digest, page_lang)
             self.body.remember(
                 title=title, summary=digested["summary"], body=text[:4000],
-                lang=page_lang, kind="web", keywords=digested["keywords"],
+                lang=page_lang, kind=("paper" if dest.kind == "paper" else "web"),
+                keywords=digested["keywords"],
                 source_url=dest.url, importance=digested["importance"],
                 journey_id=jid, page_id=page_id,
             )
@@ -148,7 +157,12 @@ class Wanderer:
 
     # ── اختيار المحطّة ───────────────────────────────────────────────────
     def _choose_destination(self, lg: str, seeds: list[str]) -> Optional[Destination]:
-        """ثلاثة أبواب: عشوائي محض، بحث عن فضوله، أو خلاصة أخبار وطنية."""
+        """أربعة أبواب: ورقة بحث، عشوائي محض، بحث عن فضوله، أو خبر وطني."""
+        if seeds and self.rng.random() < self.p.research_bias:
+            dest = self._research_paper(lg, self.rng.choice(seeds))
+            if dest is not None:
+                return dest
+
         roll = self.rng.random()
         curiosity = self.p.curiosity
 
@@ -201,16 +215,50 @@ class Wanderer:
         return Destination(url=sources.wiki_url(lg, titles[0], site), lang=lg,
                            source=f"{lg}.{site}", title=titles[0], kind="wiki")
 
+    def _term_in(self, lg: str, seed: str) -> str:
+        """المصطلح كما يُقال بتلك اللغة — أو كما هو إن لم يوجد مقابل."""
+        if lg == "ar":
+            return seed
+        translated = sources.translate_term(self.f, self.body.conn, seed, "ar", lg)
+        if translated:
+            self.on_event("translate", {"from": seed, "to": translated, "lang": lg})
+            return translated
+        return seed
+
+    def _research_paper(self, lg: str, seed: str) -> Optional[Destination]:
+        """ورقة بحث بلغة أهلها. الملخّص يأتي مع النتيجة فلا نطلب الصفحة."""
+        if lg in self._no_papers:
+            return None
+        queue = self._papers.get(lg)
+        if not queue:
+            term = self._term_in(lg, seed)
+            papers = research.search_papers(self.f, term, lang=lg, limit=8)
+            if not papers:
+                # قاعدةٌ لم تُجب بهذه اللغة (أو الشبكة مقطوعة): لا نعيد
+                # سؤالها في كل محاولة فنُنفق الرحلة كلها في انتظار مهلات.
+                self._no_papers.add(lg)
+                return None
+            queue = [
+                Destination(url=pp.url or f"doi:{pp.doi}", lang=pp.lang or lg,
+                            source=f"{pp.provider}: {pp.venue or 'بحث'}",
+                            title=pp.title, kind="paper",
+                            payload={"text": pp.as_text(), "year": pp.year,
+                                     "cited_by": pp.cited_by, "doi": pp.doi})
+                for pp in papers if pp.url or pp.doi
+            ]
+            self.rng.shuffle(queue)
+            self._papers[lg] = queue
+        while queue:
+            dest = queue.pop()
+            if not self.body.has_seen(dest.url):
+                return dest
+        return None
+
     def _search_wiki(self, lg: str, seed: str) -> Optional[Destination]:
         """يسأل عن فضوله بلسان أهل تلك اللغة، لا بلسانه هو."""
         if lg not in self.sources.get("wiki_langs", []):
             return None
-        term = seed
-        if lg != "ar":
-            translated = sources.translate_term(self.f, self.body.conn, seed, "ar", lg)
-            if translated:
-                term = translated
-                self.on_event("translate", {"from": seed, "to": term, "lang": lg})
+        term = self._term_in(lg, seed)
         titles = sources.wiki_search(self.f, lg, term, limit=3)
         if not titles:
             return None
@@ -222,6 +270,9 @@ class Wanderer:
     # ── القراءة ──────────────────────────────────────────────────────────
     def _read(self, dest: Destination) -> Optional[dict]:
         try:
+            if dest.kind == "paper" and dest.payload:
+                return {"title": dest.title, "text": dest.payload["text"],
+                        "lang": dest.lang}
             if dest.kind == "wiki":
                 site = "wikinews" if "wikinews" in dest.source else "wikipedia"
                 got = sources.wiki_extract(self.f, dest.lang, dest.title, site=site)
@@ -247,9 +298,6 @@ class Wanderer:
         """اللغة التي نصدّقها: ما أعلنته الصفحة، ما لم تكذّبه كتابة النص."""
         if declared and len(declared) <= 3:
             return declared
-        script = script_of(text)
-        if script == "cjk" and planned not in ("zh", "ja", "ko"):
-            return planned
         return planned
 
     # ── الفضول القادم ────────────────────────────────────────────────────

@@ -8,7 +8,7 @@ import sys
 import time
 from typing import Optional
 
-from . import config, sources
+from . import config, languages, research, sources
 from .body import Body
 from .mind import LLM, Mind, describe_backend
 from .net import FetchError, Fetcher
@@ -189,6 +189,107 @@ def cmd_note(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_papers(args: argparse.Namespace) -> int:
+    """بحث مباشر في قواعد الأبحاث المفتوحة، بأي لغة."""
+    p = Personality.load()
+    f = Fetcher(respect_robots=True)
+    query = " ".join(args.query)
+    lg = args.lang or ""
+
+    # يسأل بلسان أهل اللغة لا بلسانك، تماماً كما يفعل وهو يتجوّل
+    if lg and lg != "ar":
+        with Body() as b:
+            term = sources.translate_term(f, b.conn, query, "ar", lg)
+        if term and term != query:
+            print(f"«{query}» تُقال «{term}» بـ{languages.arabic_name(lg)}\n")
+            query = term
+
+    providers = tuple(args.source) if args.source else research.PROVIDERS
+    found = research.search_papers(f, query, lang=lg, limit=args.limit,
+                                   providers=providers)
+    if not found:
+        print("لا شيء. جرّب لغة أخرى أو مصطلحاً أعمّ.")
+        return 1
+
+    for pp in found:
+        head = f"[{pp.lang or '؟'}] {pp.title}"
+        print(f"\n{head}")
+        meta = [x for x in (str(pp.year) if pp.year else "", pp.venue,
+                            f"استُشهد به {pp.cited_by}" if pp.cited_by else "") if x]
+        if meta:
+            print("  " + " • ".join(meta))
+        if pp.authors:
+            print(f"  {'، '.join(a for a in pp.authors[:4] if a)}")
+        if pp.abstract:
+            print(f"  {pp.abstract[:280]}{'…' if len(pp.abstract) > 280 else ''}")
+        print(f"  ← {pp.url or ('doi:' + pp.doi)}   [{pp.provider}]")
+
+    if args.save:
+        mind = Mind(p, use_llm=not args.no_llm)
+        with Body() as b:
+            kept = 0
+            for pp in found:
+                url = pp.url or f"doi:{pp.doi}"
+                if b.has_seen(url):
+                    continue
+                text = pp.as_text()
+                page_id = b.store_page(journey_id=None, url=url, host=pp.provider,
+                                       lang=pp.lang or lg or "en",
+                                       source=pp.provider, title=pp.title, text=text)
+                if page_id is None:
+                    continue
+                d = mind.digest(pp.title, text, pp.lang or lg or "en")
+                b.remember(title=pp.title, summary=d["summary"], body=text[:4000],
+                           lang=pp.lang or lg or "en", kind="paper",
+                           keywords=d["keywords"], source_url=url,
+                           importance=max(0.6, d["importance"]), page_id=page_id)
+                kept += 1
+        print(f"\nحُفظت {kept} ورقة في جسده.")
+    return 0
+
+
+def cmd_langs(args: argparse.Namespace) -> int:
+    """اللغات التي يعرف كيف يتجوّل فيها، وكيف توزّع وقته بينها."""
+    p = Personality.load()
+
+    if args.profile:
+        weights = languages.profile(args.profile)
+        known = languages.profile("العالم")
+        if args.profile not in ("العالم", "world", "all", "متوازن") \
+                and args.profile not in languages.REGIONS:
+            print(f"لا أعرف توزيعاً باسم «{args.profile}».")
+            print(f"المتاح: متوازن، العالم، {'، '.join(languages.REGIONS)}")
+            return 1
+        p.languages = weights
+        p.language_profile = args.profile
+        p.save()
+        print(f"صار يتجوّل في {len(weights)} لغة ({args.profile}):")
+        print("  " + languages.describe(list(weights)[:12]))
+        if len(weights) > 12:
+            print(f"  …و{len(weights) - 12} أخرى")
+        return 0
+
+    if args.all:
+        for region in languages.REGIONS:
+            codes = languages.codes_in(region)
+            print(f"\n{region} ({len(codes)}):")
+            for c in codes:
+                mark = "●" if c in p.languages else "○"
+                print(f"  {mark} {c:<4} {languages.arabic_name(c):<16}"
+                      f" {languages.native_name(c)}")
+        print(f"\n● = يزورها الآن ({len(p.languages)} من {len(languages.LANGUAGES)})")
+        return 0
+
+    print(f"توزيعه الحالي: {p.language_profile} — {len(p.languages)} لغة\n")
+    for code, w in sorted(p.languages.items(), key=lambda kv: -kv[1])[:args.limit]:
+        bar = "█" * max(1, int(w * 120))
+        print(f"  {code:<4} {languages.arabic_name(code):<16} {bar} {w:.3f}")
+    print(f"\nكل اللغات: rooh langs --all")
+    print(f"غيّر التوزيع: rooh langs --profile العالم")
+    print(f"المتاح: متوازن، العالم، {'، '.join(languages.REGIONS)}")
+    return 0
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     with Body() as b:
         st = b.stats()
@@ -197,7 +298,8 @@ def cmd_status(args: argparse.Namespace) -> int:
     print(f"وُلد    : {_when(st['born_at'])}")
     print(f"رحلات  : {st['journeys']}")
     print(f"صفحات  : {st['pages']}")
-    print(f"ذكريات : {st['memories']}")
+    print(f"ذكريات : {st['memories']}" +
+          (f"  (منها {st['papers']} ورقة بحث)" if st.get("papers") else ""))
     print(f"فضول   : {st['interests']} مصطلحاً")
     if st["by_lang"]:
         print("لغاته  : " + "، ".join(f"{k}={v}" for k, v in st["by_lang"].items()))
@@ -303,6 +405,23 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--title", default=None)
     p.add_argument("--lang", default="ar")
     p.set_defaults(fn=cmd_note)
+
+    p = sub.add_parser("papers", help="بحث في قواعد الأبحاث المفتوحة بأي لغة")
+    p.add_argument("query", nargs="+")
+    p.add_argument("--lang", default=None, help="لغة البحث (ja, ru, es…)")
+    p.add_argument("-n", "--limit", type=int, default=5)
+    p.add_argument("--source", action="append",
+                   choices=list(research.PROVIDERS), help="يقصر السؤال على قاعدة")
+    p.add_argument("--save", action="store_true", help="يحفظ النتائج في جسده")
+    p.add_argument("--no-llm", action="store_true")
+    p.set_defaults(fn=cmd_papers)
+
+    p = sub.add_parser("langs", help="لغات العالم التي يتجوّل فيها")
+    p.add_argument("--all", action="store_true", help="يعرض كل اللغات بالأقاليم")
+    p.add_argument("--profile", default=None,
+                   help="يغيّر التوزيع: متوازن | العالم | اسم إقليم")
+    p.add_argument("-n", "--limit", type=int, default=20)
+    p.set_defaults(fn=cmd_langs)
 
     p = sub.add_parser("status", help="حالة الجسد")
     p.set_defaults(fn=cmd_status)

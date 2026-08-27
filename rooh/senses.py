@@ -22,9 +22,17 @@ _SKIP_TAGS = {"script", "style", "noscript", "template", "svg", "nav", "footer",
 _BLOCK_TAGS = {"p", "div", "br", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6",
                "section", "article", "blockquote", "td"}
 
-#: كم حرفاً صينياً/يابانياً يعادل الحرف اللاتيني في كثافة المعنى (انظر
-#: looks_substantial). ليست رقماً اعتباطياً: مشتقّة من متوسّط طول الكلمة.
-CJK_DENSITY = 0.28
+#: كثافة المعنى لكل كتابة متّصلة، نسبةً إلى اللاتينية (انظر
+#: looks_substantial). ليست أرقاماً اعتباطية: مشتقّة من متوسّط طول
+#: الكلمة في كل كتابة.
+DENSITY: dict[str, float] = {
+    "cjk": 0.28,       # الحرف ≈ كلمة
+    "thai": 0.50,      # المقطع ٣–٤ محارف
+    "lao": 0.50,
+    "khmer": 0.50,
+    "myanmar": 0.50,
+    "tibetan": 0.50,
+}
 
 
 class _Reader(HTMLParser):
@@ -136,11 +144,13 @@ def looks_substantial(text: str, min_chars: int = 400) -> bool:
 
     حساب النسبة: ٤٠٠ حرف لاتيني ≈ ٧٢ كلمة (بمتوسّط ٥٫٥ حرف للكلمة مع
     الفراغ)، والكلمة الصينية أو اليابانية ≈ ١٫٥ حرف، أي ما يقارب ١١٠
-    حرفاً لنفس القدر من المعنى — نسبة ٠٫٢٨.
+    حرفاً لنفس القدر من المعنى — نسبة ٠٫٢٨. والتايلندية بينهما.
+
+    أما الهندية والتاميلية والأمهرية فتفصل كلماتها بفراغ ككثافة
+    اللاتينية تقريباً، فلا تحتاج خصماً.
     """
     from .lang import script_of
 
     if not text:
         return False
-    threshold = min_chars * CJK_DENSITY if script_of(text) == "cjk" else min_chars
-    return len(text) >= threshold
+    return len(text) >= min_chars * DENSITY.get(script_of(text), 1.0)

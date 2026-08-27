@@ -13,7 +13,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from rooh import lang, senses, sources          # noqa: E402
+from rooh import lang, languages, research, senses, sources   # noqa: E402
 from rooh.body import Body                       # noqa: E402
 from rooh.mind import Mind                       # noqa: E402
 from rooh.net import Fetcher                     # noqa: E402
@@ -124,6 +124,49 @@ class TestLang(unittest.TestCase):
     def test_japanese_drops_grammar_bigrams(self) -> None:
         kws = lang.keywords(PAGES["ja"][1], "ja", 10)
         self.assertFalse(any("は" in k or "であ" == k for k in kws), kws)
+
+    # كتابات العالم كما تصل فعلاً من مواقعها
+    WORLD = {
+        "hi": "कृत्रिम बुद्धिमत्ता और भारतीय भाषाओं का प्रसंस्करण। इस शोध में "
+              "हिंदी भाषा मॉडल प्रस्तुत किया गया है।",
+        "ta": "செயற்கை நுண்ணறிவு மற்றும் தமிழ் மொழி ஆய்வு நடைபெற்றது",
+        "bn": "কৃত্রিম বুদ্ধিমত্তা এবং বাংলা ভাষা প্রক্রিয়াকরণ গবেষণা",
+        "am": "ሰው ሰራሽ አስተውሎት እና የአማርኛ ቋንቋ ጥናት",
+        "ka": "ხელოვნური ინტელექტი და ქართული ენა",
+        "th": "ปัญญาประดิษฐ์และการเรียนรู้ของเครื่องกำลังพัฒนา",
+        "km": "បញ្ញាសិប្បនិម្មិតនិងការរៀនម៉ាស៊ីន",
+        "he": "בינה מלאכותית ועיבוד שפה עברית",
+        "el": "Τεχνητή νοημοσύνη και επεξεργασία γλώσσας",
+    }
+
+    def test_every_script_yields_tokens(self) -> None:
+        """انحدار: `\\w` في بايثون لا يعدّ علامات التشكيل حروفاً، فكانت
+        التاميلية تُقطّع إلى صفر كلمات، والهندية إلى شظيّة واحدة."""
+        for code, text in self.WORLD.items():
+            toks = lang.tokenize(text, code)
+            self.assertGreaterEqual(len(toks), 3, f"{code}: {toks}")
+            self.assertTrue(lang.keywords(text, code, 5), code)
+
+    def test_indic_words_stay_whole(self) -> None:
+        toks = lang.tokenize(self.WORLD["hi"], "hi")
+        self.assertIn("प्रसंस्करण", toks)     # لا «करण»
+        self.assertIn("कृत्रिम", toks)
+        self.assertIn("தமிழ்", lang.tokenize(self.WORLD["ta"], "ta"))
+
+    def test_continuous_scripts_are_ngrammed(self) -> None:
+        """التايلندية والخميرية بلا فراغات ككتابات الشرق الأقصى."""
+        for code in ("th", "km"):
+            script = lang.script_of(self.WORLD[code])
+            self.assertTrue(lang.is_continuous(script), f"{code}={script}")
+            self.assertGreater(len(lang.tokenize(self.WORLD[code], code)), 10)
+        # بينما الهندية والتاميلية تفصل بفراغ، فلا تُعامَل معاملتها
+        for code in ("hi", "ta", "am", "ka"):
+            self.assertFalse(lang.is_continuous(lang.script_of(self.WORLD[code])), code)
+
+    def test_danda_ends_a_hindi_sentence(self) -> None:
+        one = lang.summarize(self.WORLD["hi"], "hi", 1)
+        self.assertTrue(one.endswith("।"), one)
+        self.assertLess(len(one), len(self.WORLD["hi"]))
 
     def test_script_detection(self) -> None:
         self.assertEqual(lang.script_of(PAGES["zh"][1]), "cjk")
@@ -289,6 +332,191 @@ class TestSources(unittest.TestCase):
         self.assertEqual(sources.parse_feed(""), [])
 
 
+# ── لغات العالم ──────────────────────────────────────────────────────────
+class TestLanguages(unittest.TestCase):
+    def test_registry_is_wide_and_well_formed(self) -> None:
+        self.assertGreater(len(languages.LANGUAGES), 60)
+        for code, info in languages.LANGUAGES.items():
+            self.assertRegex(code, r"^[a-z]{2,3}$")
+            self.assertEqual(len(info), 5)
+            ar, native, script, region, weight = info
+            self.assertTrue(ar and native and script and region)
+            self.assertGreater(weight, 0)
+
+    def test_profiles_are_normalized(self) -> None:
+        for name in ("متوازن", "العالم", *languages.REGIONS):
+            w = languages.profile(name)
+            self.assertTrue(w, name)
+            self.assertAlmostEqual(sum(w.values()), 1.0, places=3, msg=name)
+
+    def test_world_profile_covers_every_language(self) -> None:
+        self.assertEqual(set(languages.profile("العالم")), set(languages.LANGUAGES))
+
+    def test_region_profile_stays_in_region(self) -> None:
+        for code in languages.profile("أفريقيا"):
+            self.assertEqual(languages.region_of(code), "أفريقيا")
+
+    def test_unknown_profile_falls_back(self) -> None:
+        self.assertEqual(languages.profile("لا-يوجد"), languages.profile("متوازن"))
+
+
+# ── الأبحاث ──────────────────────────────────────────────────────────────
+class _FakeFetcher:
+    """يردّ بما نمليه عليه، فنختبر التفكيك لا الشبكة."""
+
+    def __init__(self, payload: object, raises: bool = False):
+        self.payload = payload
+        self.raises = raises
+        self.urls: list[str] = []
+
+    def get_json(self, url: str) -> object:
+        self.urls.append(url)
+        if self.raises:
+            from rooh.net import FetchError
+
+            raise FetchError("مقطوع")
+        return self.payload
+
+    def get(self, url: str, accept: str = "") -> object:
+        self.urls.append(url)
+        if self.raises:
+            from rooh.net import FetchError
+
+            raise FetchError("مقطوع")
+
+        class R:
+            def text(_self) -> str:
+                return self.payload  # type: ignore[return-value]
+
+        return R()
+
+
+class TestResearch(unittest.TestCase):
+    def test_openalex_rebuilds_inverted_abstract(self) -> None:
+        """OpenAlex يعطي الملخّص مقلوباً {كلمة: مواضعها}؛ نعيد ترتيبه."""
+        payload = {"results": [{
+            "id": "https://openalex.org/W1", "doi": "https://doi.org/10.1/x",
+            "display_name": "量子計算の誤り訂正", "language": "ja",
+            "publication_year": 2024, "cited_by_count": 7,
+            "abstract_inverted_index": {"本": [0], "研究": [1], "では": [2],
+                                        "量子": [3], "誤り訂正": [4]},
+            "authorships": [{"author": {"display_name": "田中 太郎"}}],
+            "primary_location": {"landing_page_url": "https://j.example/1",
+                                 "source": {"display_name": "日本物理学会"}},
+            "open_access": {"oa_url": "https://j.example/1.pdf"},
+        }]}
+        f = _FakeFetcher(payload)
+        papers = research.openalex_search(f, "量子", lang="ja")
+        self.assertEqual(len(papers), 1)
+        pp = papers[0]
+        self.assertEqual(pp.abstract, "本 研究 では 量子 誤り訂正")
+        self.assertEqual(pp.lang, "ja")
+        self.assertEqual(pp.doi, "10.1/x")            # بلا بادئة doi.org
+        self.assertEqual(pp.url, "https://j.example/1.pdf")   # يفضّل المفتوح
+        self.assertEqual(pp.authors, ["田中 太郎"])
+        self.assertEqual(pp.cited_by, 7)
+
+    def test_openalex_sends_language_filter(self) -> None:
+        """الترشيح باللغة هو ما يجعل «أبحاث مختلفة اللغة» ممكناً أصلاً."""
+        f = _FakeFetcher({"results": []})
+        research.openalex_search(f, "ذكاء", lang="ru")
+        self.assertIn("language%3Aru", f.urls[0])
+
+    def test_crossref_strips_jats_markup(self) -> None:
+        payload = {"message": {"items": [{
+            "title": ["Квантовые вычисления"],
+            "abstract": "<jats:p>Аннотация  текста</jats:p>",
+            "DOI": "10.5/y", "URL": "https://doi.org/10.5/y",
+            "issued": {"date-parts": [[2023, 4]]},
+            "author": [{"given": "Иван", "family": "Петров"}],
+            "container-title": ["Журнал"], "is-referenced-by-count": 3,
+        }]}}
+        pp = research.crossref_search(_FakeFetcher(payload), "квант")[0]
+        self.assertEqual(pp.abstract, "Аннотация текста")
+        self.assertNotIn("<", pp.abstract)
+        self.assertEqual(pp.year, 2023)
+        self.assertEqual(pp.authors, ["Иван Петров"])
+
+    def test_arxiv_parses_atom(self) -> None:
+        xml = """<?xml version="1.0"?>
+        <feed xmlns="http://www.w3.org/2005/Atom"><entry>
+          <id>http://arxiv.org/abs/2401.001</id>
+          <title>Quantum\n  error correction</title>
+          <summary>We  study\n  codes.</summary>
+          <published>2024-01-02T00:00:00Z</published>
+          <author><name>A. Author</name></author>
+        </entry></feed>"""
+        pp = research.arxiv_search(_FakeFetcher(xml), "quantum")[0]
+        self.assertEqual(pp.title, "Quantum error correction")
+        self.assertEqual(pp.abstract, "We study codes.")
+        self.assertEqual(pp.year, 2024)
+        self.assertEqual(pp.venue, "arXiv")
+
+    def test_doaj_parses_bibjson(self) -> None:
+        payload = {"results": [{"bibjson": {
+            "title": "Computación cuántica", "abstract": "Resumen del artículo",
+            "year": "2022", "author": [{"name": "María López"}],
+            "journal": {"title": "Revista", "language": ["es"]},
+            "link": [{"url": "https://revista.example/1"}],
+            "identifier": [{"type": "doi", "id": "10.9/z"}],
+        }}]}
+        pp = research.doaj_search(_FakeFetcher(payload), "cuántica")[0]
+        self.assertEqual(pp.lang, "es")
+        self.assertEqual(pp.year, 2022)
+        self.assertEqual(pp.doi, "10.9/z")
+
+    def test_dead_provider_returns_empty_not_crash(self) -> None:
+        dead = _FakeFetcher(None, raises=True)
+        for fn in (research.openalex_search, research.crossref_search,
+                   research.arxiv_search, research.doaj_search):
+            self.assertEqual(fn(dead, "س"), [], fn.__name__)
+
+    def test_malformed_payloads_do_not_crash(self) -> None:
+        # واجهات حقيقية ترجع المفتاح بقيمة null، و dict.get(k, []) لا تحميك
+        # من ذلك — ترجع None لا [].
+        for payload in ({}, {"results": [{}]}, {"message": {}}, {"results": None},
+                        {"message": None}, {"message": {"items": None}},
+                        {"results": [{"bibjson": None}]}):
+            try:
+                research.openalex_search(_FakeFetcher(payload), "س")
+                research.crossref_search(_FakeFetcher(payload), "س")
+                research.doaj_search(_FakeFetcher(payload), "س")
+            except Exception as e:                     # noqa: BLE001
+                self.fail(f"انهار على {payload}: {type(e).__name__}: {e}")
+
+    def test_scholarly_text_excludes_display_labels(self) -> None:
+        """انحدار: هضم البيانات الوصفية جعل «الباحثون» و«السنة» من أكثر ما يشغله."""
+        pp = research.Paper(title="عنوان البحث", abstract="ملخّص البحث",
+                            authors=["أحمد"], venue="مجلة", year=2021, doi="10.1/a")
+        scholarly = pp.scholarly_text()
+        for label in ("الباحثون", "المنشور في", "السنة", "DOI"):
+            self.assertNotIn(label, scholarly)
+        self.assertIn("عنوان البحث", scholarly)
+        self.assertIn("ملخّص البحث", scholarly)
+
+    def test_paper_as_text_carries_metadata(self) -> None:
+        pp = research.Paper(title="ع", abstract="ملخّص", authors=["أ", "ب"],
+                            venue="مجلة", year=2021, doi="10.1/a")
+        text = pp.as_text()
+        for piece in ("ع", "ملخّص", "أ، ب", "مجلة", "2021", "10.1/a"):
+            self.assertIn(piece, text)
+
+    def test_wiki_api_null_fields_do_not_crash(self) -> None:
+        for payload in ({}, {"query": None}, {"query": {"search": None}},
+                        {"query": {"pages": None}}):
+            self.assertEqual(sources.wiki_search(_FakeFetcher(payload), "ja", "س"), [])
+            self.assertEqual(sources.wiki_random(_FakeFetcher(payload), "ja"), [])
+            self.assertIsNone(sources.wiki_extract(_FakeFetcher(payload), "ja", "ع"))
+
+    def test_search_dedupes_across_providers(self) -> None:
+        same = {"results": [{"display_name": "نفس العنوان",
+                             "abstract_inverted_index": {"ن": [0]},
+                             "primary_location": {"landing_page_url": "u"}}]}
+        found = research.search_papers(_FakeFetcher(same), "س", limit=5,
+                                       providers=("openalex", "openalex"))
+        self.assertEqual(len(found), 1)
+
+
 # ── الرحلة كاملة ─────────────────────────────────────────────────────────
 class TestJourney(unittest.TestCase):
     def setUp(self) -> None:
@@ -302,6 +530,7 @@ class TestJourney(unittest.TestCase):
     def _wanderer(self, base: str, **kw) -> Wanderer:
         p = Personality.default()
         p.curiosity = 0.0            # يبقى في شبكتنا المحلية، لا يخرج لويكيبيديا
+        p.research_bias = 0.0        # الأبحاث لها اختبارها الخاص
         p.seed_interests = []
         p.languages = {lg: 1.0 for lg in PAGES}
         p.limits = {**p.limits, **kw}
@@ -359,6 +588,7 @@ class TestJourney(unittest.TestCase):
         with LocalNet() as base:
             p = Personality.default()
             p.curiosity = 0.0
+            p.research_bias = 0.0
             p.seed_interests = []
             p.languages = {"zh": 1.0, "xx": 1.0}
             src = {"wiki_langs": [], "wikinews_langs": [], "feeds": {
@@ -389,6 +619,96 @@ class TestJourney(unittest.TestCase):
             rep = w.journey(pages=3, only_lang="zh")
         self.assertEqual(rep.stored, 3)
         self.assertEqual(self.body.stats()["by_lang"].get("zh"), 3)
+
+    def test_papers_enter_the_body_as_papers(self) -> None:
+        """الورقة تُحفظ نوعاً مستقلاً، ومحتواها يأتي مع نتيجة البحث بلا جلب."""
+        from unittest.mock import patch
+
+        made = [
+            research.Paper(
+                title=f"量子誤り訂正の研究 {i}", lang="ja", year=2024,
+                abstract="本研究では量子誤り訂正符号の新しい構成法を提案する。"
+                         "従来手法と比較して誤り率が大幅に低減されることを示す。"
+                         "数値実験により提案手法の有効性を確認した。",
+                authors=["田中 太郎"], venue="日本物理学会", doi=f"10.1/{i}",
+                url=f"https://j.example/{i}", provider="openalex", cited_by=i)
+            for i in range(1, 6)
+        ]
+        with LocalNet() as base:
+            w = self._wanderer(base)
+            w.p.research_bias = 1.0            # أوراق فقط
+            w.p.seed_interests = ["الحوسبة الكمية"]
+            with patch.object(research, "search_papers", return_value=made):
+                rep = w.journey(pages=3, only_lang="ja")
+
+        self.assertEqual(rep.stored, 3)
+        rows = self.body.conn.execute(
+            "SELECT title, kind, lang, source_url, body FROM memories").fetchall()
+        self.assertEqual(len(rows), 3)
+        for r in rows:
+            self.assertEqual(r["kind"], "paper")
+            self.assertEqual(r["lang"], "ja")
+            self.assertTrue(r["source_url"].startswith("https://j.example/"))
+            self.assertIn("日本物理学会", r["body"])     # البيانات الوصفية محفوظة
+            self.assertIn("DOI:", r["body"])
+        self.assertEqual(self.body.stats()["papers"], 3)
+
+    def test_paper_keywords_are_topics_not_labels(self) -> None:
+        """ما يدخل خريطة فضوله من الورقة موضوعُها، لا تسمياتي الوصفية."""
+        from unittest.mock import patch
+
+        made = [research.Paper(
+            title="Aprendizaje profundo en agricultura andina", lang="es",
+            abstract="Este artículo presenta un modelo de visión por computadora "
+                     "para detectar plagas en cultivos de papa en los Andes. "
+                     "El modelo alcanza una precisión del noventa por ciento.",
+            authors=["María López"], venue="Revista", year=2023, doi="10.9/z",
+            url="https://es.example/1", provider="doaj")]
+        with LocalNet() as base:
+            w = self._wanderer(base)
+            w.p.research_bias = 1.0
+            w.p.seed_interests = ["الذكاء الاصطناعي"]
+            with patch.object(research, "search_papers", return_value=made):
+                w.journey(pages=1, only_lang="es")
+
+        terms = [t for t, _lg, _w in self.body.top_interests(20)]
+        for label in ("الباحثون", "المنشور", "السنة", "doi"):
+            self.assertNotIn(label, terms, f"تسرّبت «{label}» إلى فضوله: {terms}")
+        self.assertTrue(any(t in ("aprendizaje", "agricultura", "modelo", "andes",
+                                  "profundo", "artículo", "computadora", "cultivos",
+                                  "precisión", "plagas", "visión", "presenta")
+                            for t in terms), terms)
+        # والبيانات الوصفية باقية في الجسد للعرض
+        row = self.body.conn.execute("SELECT body FROM memories").fetchone()
+        self.assertIn("María López", row["body"])
+        self.assertIn("DOI:", row["body"])
+
+    def test_paper_without_abstract_is_skipped(self) -> None:
+        """ورقة بعنوان بلا ملخّص ليست معرفة — لا تدخل الجسد."""
+        from unittest.mock import patch
+
+        empty = [research.Paper(title="عنوان بلا ملخّص", abstract="", lang="ja",
+                                url="https://j.example/x", provider="openalex")]
+        with LocalNet() as base:
+            w = self._wanderer(base)
+            w.p.research_bias = 1.0
+            w.p.seed_interests = ["س"]
+            with patch.object(research, "search_papers", return_value=empty):
+                rep = w.journey(pages=2, only_lang="ja")
+        self.assertEqual(self.body.stats()["papers"], 0)
+        self.assertGreaterEqual(rep.visited, 1)
+
+    def test_unreachable_research_is_asked_once_per_language(self) -> None:
+        """قاعدة لا تجيب: نسألها مرّة، لا في كل محاولة، وإلا نفدت الرحلة انتظاراً."""
+        from unittest.mock import patch
+
+        with LocalNet() as base:
+            w = self._wanderer(base)
+            w.p.research_bias = 1.0
+            w.p.seed_interests = ["س"]
+            with patch.object(research, "search_papers", return_value=[]) as stub:
+                w.journey(pages=3, only_lang="ru")
+            self.assertEqual(stub.call_count, 1, "سُئلت القاعدة أكثر من مرّة")
 
     def test_blocked_host_is_respected(self) -> None:
         with LocalNet() as base:
