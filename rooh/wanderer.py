@@ -17,6 +17,7 @@ from typing import Callable, Optional
 from urllib.parse import urlparse
 
 from . import config, research, senses, sources
+from .drives import Drives
 from .body import Body
 from .mind import Mind
 from .net import FetchError, Fetcher
@@ -35,6 +36,10 @@ class JourneyReport:
     highlights: list[tuple[str, str]] = field(default_factory=list)
     journal: str = ""
     duration: float = 0.0
+    urges: list[str] = field(default_factory=list)     # ما أراده في كل خطوة
+    asked: list[str] = field(default_factory=list)     # أسئلة فتحها
+    answered: list[str] = field(default_factory=list)  # أسئلة أغلقها
+    came_home_early: bool = False                      # عاد تعباً لا مكتفياً
 
 
 class Wanderer:
@@ -61,19 +66,29 @@ class Wanderer:
         self._drained: set[str] = set()         # لغات استنفدنا خلاصاتها
         self._papers: dict[str, list[Destination]] = {}   # أوراق بحث بانتظار القراءة
         self._no_papers: set[str] = set()       # لغات لم تُجدِ فيها قواعد الأبحاث
+        # حالته الداخلية، محفوظة في الجسد بين الرحلات
+        self.drives = Drives.loads(self.body.load_drives())
 
     # ── الرحلة ───────────────────────────────────────────────────────────
     def journey(self, pages: Optional[int] = None,
                 only_lang: Optional[str] = None) -> JourneyReport:
         budget = pages or self.p.pages_per_journey
-        mood = self.p.pick_mood(self.rng)
         seeds = self._current_seeds()
         started = time.monotonic()
 
+        # يستيقظ فيجد نفسه على حالٍ: أسئلةٌ تنتظره، وتعبُ أمسٍ قد زال
+        self.drives.rest()
+        self.drives.feel_questions(self.body.count_open_questions(),
+                                   self.p.persistence)
+        mood = self.drives.mood()
+
         jid = self.body.start_journey(seeds, mood)
         report = JourneyReport(journey_id=jid, mood=mood)
-        self.on_event("wake", {"mood": mood, "seeds": seeds, "budget": budget})
+        self.on_event("wake", {"mood": mood, "seeds": seeds, "budget": budget,
+                               "urge": self.drives.urge(bool(
+                                   self.body.count_open_questions()))})
 
+        known = self.body.known_terms()
         harvested: list[str] = []
         seen_langs: list[str] = []
         attempts = 0
@@ -82,8 +97,17 @@ class Wanderer:
 
         while report.stored < budget and attempts < max_attempts:
             attempts += 1
-            lg = only_lang or self.p.pick_language(self.rng)
-            dest = self._choose_destination(lg, seeds)
+            has_q = self.body.count_open_questions() > 0
+            urge = self.drives.urge(has_q)
+            if urge == "عودة":
+                # تعِب. لا فائدة من تجوّلٍ بلا انتباه.
+                report.came_home_early = True
+                self.on_event("tired", {"stored": report.stored, "of": budget})
+                break
+            report.urges.append(urge)
+
+            lg = only_lang or self._pick_language_for(urge)
+            dest = self._destination_for(urge, lg, seeds)
             if dest is None:
                 continue
             if self.body.has_seen(dest.url):
@@ -122,17 +146,48 @@ class Wanderer:
             # للورقة: نهضم عنوانها وملخّصها، لا بياناتها الوصفية
             to_digest = (dest.payload or {}).get("content") or text
             digested = self.mind.digest(title, to_digest, page_lang)
-            self.body.remember(
+            mem_id = self.body.remember(
                 title=title, summary=digested["summary"], body=text[:4000],
                 lang=page_lang, kind=("paper" if dest.kind == "paper" else "web"),
                 keywords=digested["keywords"],
                 source_url=dest.url, importance=digested["importance"],
                 journey_id=jid, page_id=page_id,
             )
-            for kw in digested["keywords"][:6]:
-                self.body.bump_interest(kw, page_lang, amount=0.12)
-            harvested.extend(digested["keywords"][:4])
+            keywords = digested["keywords"]
 
+            # ما مقدار الجديد في هذه الصفحة؟ عليه تدور حالته كلها.
+            novelty = Drives.novelty(keywords, known)
+            gain = self.drives.observe(novelty, self.p.openness, self.p.depth)
+
+            # أسئلة أغلقتها هذه الصفحة
+            closed = self.body.resolve_by_keywords(keywords, page_lang, mem_id)
+            for term in closed:
+                self.drives.answered()
+                report.answered.append(term)
+                self.on_event("answered", {"term": term})
+
+            # وأسئلة فتحتها: مصطلحٌ بارز فيها لا يعرفه بعد
+            for term in self._new_questions(keywords, known, closed):
+                if self.body.ask(term, page_lang, context=title,
+                                 from_memory=mem_id):
+                    report.asked.append(term)
+                    self.on_event("asked", {"term": term, "lang": page_lang})
+
+            # يسجّل كل ما قرأه، لا ما شدّه فقط. التمييز بينهما في الوزن
+            # لا في الوجود: الأوائل تجذبه، والبقيّة يعرفها فحسب.
+            #
+            # حين كان يسجّل الستّة الأولى ويقيس الجِدّة على الاثني عشر،
+            # كان النصف الباقي «جديداً» أبداً، فتجمّدت الجِدّة على ٠٫٥
+            # ولم يستطع أن يملّ ولا أن يحتار مهما قرأ.
+            for rank, kw in enumerate(keywords):
+                self.body.bump_interest(kw, page_lang,
+                                        amount=0.12 if rank < 6 else 0.06)
+                known.add(kw.lower())
+            harvested.extend(keywords[:4])
+
+            self.on_event("learned", {"novelty": round(novelty, 2),
+                                      "gain": round(gain, 2),
+                                      "mood": self.drives.mood()})
             report.stored += 1
             report.highlights.append((title, page_lang))
             if page_lang not in seen_langs:
@@ -142,11 +197,22 @@ class Wanderer:
 
         # ── العودة ───────────────────────────────────────────────────────
         self.body.conn.commit()
+        self.body.abandon_stale_questions(self.p.max_question_attempts)
         self.body.decay_interests()
+        self._protect_obsessions()
+        self.drives.feel_questions(self.body.count_open_questions(),
+                                   self.p.persistence)
+        self.body.save_drives(self.drives.dumps())
+        report.mood = self.drives.mood()
         report.langs = seen_langs
         report.duration = time.monotonic() - started
         report.journal = self.mind.reflect(
-            mood, report.visited, report.stored, seen_langs, report.highlights
+            report.mood, report.visited, report.stored, seen_langs,
+            report.highlights,
+            state={"urges": list(dict.fromkeys(report.urges)),
+                   "asked": report.asked, "answered": report.answered,
+                   "aspiration": self.p.aspiration,
+                   "came_home_early": report.came_home_early},
         )
         self.body.write_journal(jid, report.journal)
         self._save_journal_file(jid, report)
@@ -155,23 +221,130 @@ class Wanderer:
         self.on_event("home", {"stored": report.stored, "visited": report.visited})
         return report
 
-    # ── اختيار المحطّة ───────────────────────────────────────────────────
-    def _choose_destination(self, lg: str, seeds: list[str]) -> Optional[Destination]:
-        """أربعة أبواب: ورقة بحث، عشوائي محض، بحث عن فضوله، أو خبر وطني."""
-        if seeds and self.rng.random() < self.p.research_bias:
-            dest = self._research_paper(lg, self.rng.choice(seeds))
+    # ── ترجمة النزوع إلى فعل ─────────────────────────────────────────────
+    def _pick_language_for(self, urge: str) -> str:
+        """النزوع يختار اللسان أيضاً، لا الوجهة وحدها."""
+        if urge == "مألوف":
+            # أرضٌ يعرفها: اللسان الذي له فيه أكثر الذكريات
+            rows = self.body.conn.execute(
+                """SELECT lang, COUNT(*) c FROM memories
+                   GROUP BY lang ORDER BY c DESC LIMIT 3"""
+            ).fetchall()
+            known_langs = [r["lang"] for r in rows if r["lang"] in self.p.languages]
+            if known_langs:
+                return self.rng.choice(known_langs)
+        elif urge == "غريب":
+            # لسانٌ لم يزره قطّ، وإلا فأقلّها زيارةً
+            visited = {r["lang"] for r in self.body.conn.execute(
+                "SELECT DISTINCT lang FROM memories")}
+            unvisited = [c for c in self.p.languages if c not in visited]
+            if unvisited:
+                return self.rng.choice(unvisited)
+        return self.p.pick_language(self.rng)
+
+    def _destination_for(self, urge: str, lg: str,
+                         seeds: list[str]) -> Optional[Destination]:
+        """كل نزوعٍ وبابه. هذا هو موضع تحوّل الحالة الداخلية إلى سلوك."""
+        if urge == "سؤال":
+            dest = self._chase_question(lg)
             if dest is not None:
                 return dest
+        elif urge == "مألوف":
+            # يرجع لأقوى ما في خريطة فضوله ليربط عليه ما جمع
+            anchors = [t for t, _lg, _w in self.body.top_interests(limit=5)]
+            for anchor in anchors:
+                if self.p.repels(anchor):
+                    continue
+                dest = self._search_wiki(lg, anchor)
+                if dest is not None:
+                    return dest
+        elif urge == "غريب":
+            dest = self._random_wiki(lg)
+            if dest is not None:
+                return dest
+        return self._choose_destination(lg, seeds)
 
+    def _chase_question(self, lg: str) -> Optional[Destination]:
+        """يلاحق سؤالاً فتحه ولم يغلقه. هذا ما يصل رحلة اليوم برحلة أمس."""
+        pending = self.body.open_questions(limit=6)
+        self.rng.shuffle(pending)
+        for qid, term, q_lang, _attempts in pending:
+            if self.p.repels(term):
+                continue
+            self.body.note_attempt(qid)
+            self.on_event("chasing", {"term": term, "lang": lg})
+            # يسأل عنه أولاً حيث صادفه، ثم بلسانه هو
+            for target in (q_lang if q_lang != "mul" else lg, lg):
+                dest = self._search_wiki(target, term)
+                if dest is not None:
+                    return dest
+            dest = self._research_paper(lg, term)
+            if dest is not None:
+                return dest
+        self.body.conn.commit()
+        return None
+
+    def _new_questions(self, keywords: list[str], known: set[str],
+                       closed: list[str]) -> list[str]:
+        """ما الذي مرّ به في هذه الصفحة ولم يعرفه؟
+
+        نأخذ اثنين على الأكثر: من يفتح عشرين سؤالاً في صفحة واحدة لا
+        يلاحق شيئاً — يغرق. والسؤال يجب أن يكون مصطلحاً لا شظيّة.
+        """
+        from .lang import is_continuous, script_of
+
+        just_closed = {c.lower() for c in closed}
+        out: list[str] = []
+        for term in keywords[:8]:
+            low = term.lower()
+            if low in known or low in just_closed:
+                continue
+            # حدّ الطول بحسب الكتابة: «量子» كلمة كاملة، و«ab» شظيّة.
+            # حدٌّ واحد بالحروف كان يمنعه من السؤال بالصينية أصلاً.
+            floor = 2 if is_continuous(script_of(term)) else 3
+            if len(term) < floor or self.p.repels(term):
+                continue
+            out.append(term)
+            if len(out) == 2:
+                break
+        return out
+
+    def _protect_obsessions(self) -> None:
+        """الهاجس لا يُنسى بالخفوت. هذا معنى أن يكون هاجساً."""
+        for term in self.p.obsessions:
+            self.body.bump_interest(term, "mul", amount=0.35)
+        self.body.conn.commit()
+
+    # ── اختيار المحطّة ───────────────────────────────────────────────────
+    def _choose_destination(self, lg: str, seeds: list[str]) -> Optional[Destination]:
+        """أربعة أبواب: ورقة بحث، عشوائي محض، بحث عن فضوله، أو خبر وطني.
+
+        نرتّب الأبواب بحسب مزاجه ثم **نطرقها بالترتيب حتى يُفتح أحدها**.
+        الاكتفاء بباب واحد يعني أن رحلةً كاملة تضيع لو كان ذلك الباب
+        مغلقاً — موقعٌ محجوب أو خلاصة ميّتة تُنهي جولته بلا سبب.
+        """
         roll = self.rng.random()
         curiosity = self.p.curiosity
+        seed = self.rng.choice(seeds) if seeds else None
 
+        doors: list = []
+        if seed and self.rng.random() < self.p.research_bias:
+            doors.append(lambda: self._research_paper(lg, seed))
         if roll < curiosity * 0.5:
-            return self._random_wiki(lg)
-        if roll < 0.5 + curiosity * 0.2 and seeds:
-            return self._search_wiki(lg, self.rng.choice(seeds))
-        dest = self._from_feed(lg)
-        return dest if dest else self._random_wiki(lg)
+            doors += [lambda: self._random_wiki(lg), lambda: self._from_feed(lg)]
+        elif roll < 0.5 + curiosity * 0.2 and seed:
+            doors += [lambda: self._search_wiki(lg, seed),
+                      lambda: self._from_feed(lg), lambda: self._random_wiki(lg)]
+        else:
+            doors += [lambda: self._from_feed(lg), lambda: self._random_wiki(lg)]
+        if seed:
+            doors.append(lambda: self._search_wiki(lg, seed))
+
+        for door in doors:
+            dest = door()
+            if dest is not None:
+                return dest
+        return None
 
     def _from_feed(self, lg: str) -> Optional[Destination]:
         """يأخذ مقالاً من طابور تلك اللغة، ويملأ الطابور إن فرغ.
@@ -302,10 +475,18 @@ class Wanderer:
 
     # ── الفضول القادم ────────────────────────────────────────────────────
     def _current_seeds(self) -> list[str]:
+        """ما يخرج باحثاً عنه: رغباته الخاصة أولاً، ثم فضوله المتحرّك.
+
+        الترتيب مقصود — الهواجس والطموح تدخل دائماً، فلا يُغرقها انجرافُ
+        الفضول مهما تغيّرت اهتماماته.
+        """
+        own = self.p.wants(self.rng)
         top = [t for t, _lg, _w in self.body.top_interests(limit=10)]
         base = top or list(self.p.seed_interests)
         harvested = [t for t, _lg, _w in self.body.top_interests(limit=20)][10:]
-        return self.mind.drift(base, harvested, keep=8)
+        drifted = self.mind.drift(base, harvested, keep=8)
+        seeds = own + [d for d in drifted if d not in own]
+        return [s for s in seeds if not self.p.repels(s)][:10]
 
     def _save_journal_file(self, jid: int, report: JourneyReport) -> None:
         """نسخة إنسانية من اليوميّات، خارج قاعدة البيانات، تُقرأ بأي محرّر."""
@@ -316,8 +497,12 @@ class Wanderer:
         lines = [
             f"# رحلة {jid} — {time.strftime('%Y-%m-%d %H:%M', time.localtime())}",
             f"\nالمزاج: {report.mood}  \n"
-            f"زار: {report.visited} • حفظ: {report.stored} • أخفق: {report.failed}  \n"
-            f"اللغات: {'، '.join(report.langs) or '—'}\n",
+            f"ما أراده: {'، '.join(dict.fromkeys(report.urges)) or '—'}  \n"
+            f"زار: {report.visited} • حفظ: {report.stored} • أخفق: {report.failed}"
+            + (" • عاد متعباً" if report.came_home_early else "") + "  \n"
+            f"اللغات: {'، '.join(report.langs) or '—'}  \n"
+            f"سأل: {'، '.join(report.asked) or '—'}  \n"
+            f"أجاب: {'، '.join(report.answered) or '—'}\n",
             "## ما كتبه\n", report.journal, "\n## ما رآه\n",
         ]
         lines += [f"- `[{lg}]` {t}" for t, lg in report.highlights]

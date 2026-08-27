@@ -10,6 +10,7 @@ from typing import Optional
 
 from . import config, languages, research, sources
 from .body import Body
+from .drives import Drives
 from .mind import LLM, Mind, describe_backend
 from .net import FetchError, Fetcher
 from .personality import DEFAULT_PERSONALITY, Personality
@@ -64,6 +65,10 @@ def cmd_who(args: argparse.Namespace) -> int:
     if st["by_lang"]:
         top = "، ".join(f"{k}:{v}" for k, v in list(st["by_lang"].items())[:6])
         print(f"لغات ذاكرته: {top}")
+    with Body() as b:
+        d = Drives.loads(b.load_drives())
+        open_q = b.count_open_questions()
+    print(f"حاله الآن: {d.mood()} — يريد أن {d.urge(open_q > 0)}")
     print(describe_backend(Mind(p, use_llm=not args.no_llm)))
     return 0
 
@@ -77,8 +82,16 @@ def cmd_wander(args: argparse.Namespace) -> int:
         if quiet:
             return
         if kind == "wake":
-            print(f"⟶ يخرج وهو {data['mood']} — فضوله: "
-                  f"{'، '.join(data['seeds'][:4])}")
+            print(f"⟶ يخرج وهو {data['mood']} (يريد أن {data.get('urge','يتجوّل')}) "
+                  f"— يبحث عن: {'، '.join(data['seeds'][:4])}")
+        elif kind == "chasing":
+            print(f"   ⟳ يلاحق سؤاله: «{data['term']}»")
+        elif kind == "asked":
+            print(f"   ؟ مرّ به ما لا يعرفه: «{data['term']}»")
+        elif kind == "answered":
+            print(f"   ✔ أغلق سؤاله: «{data['term']}»")
+        elif kind == "tired":
+            print(f"   … أنهكه الطريق، يعود بـ{data['stored']} من {data['of']}")
         elif kind == "translate":
             print(f"   ↯ «{data['from']}» تُقال «{data['to']}» بـ{data['lang']}")
         elif kind == "visit":
@@ -86,6 +99,8 @@ def cmd_wander(args: argparse.Namespace) -> int:
         elif kind == "kept":
             print(f"   ✓ [{data['lang']}] {data['title'][:70]} "
                   f"(وزن {data['importance']})")
+        elif kind == "learned" and data["gain"] > 0.6:
+            print(f"     ↳ تعلّم منها ({data['gain']:.2f}) — صار {data['mood']}")
         elif kind == "fail":
             print(f"   ✗ {data['why']}", file=sys.stderr)
         elif kind == "home":
@@ -290,6 +305,66 @@ def cmd_langs(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_drives(args: argparse.Namespace) -> int:
+    """حالته الداخلية الآن: ما الذي يدفعه، وماذا يريد."""
+    p = Personality.load()
+    with Body() as b:
+        d = Drives.loads(b.load_drives())
+        open_q = b.count_open_questions()
+    print(d.describe())
+    urge = d.urge(open_q > 0)
+    meaning = {
+        "عودة": "أنهكه الطريق — يريد أن يرتاح",
+        "مألوف": "جمع غريباً أكثر مما يستطيع ربطه — يريد أرضاً يعرفها",
+        "سؤال": "عنده سؤال معلّق — يريد أن يغلقه",
+        "غريب": "مَلَّ ممّا يعرف — يريد لساناً لم يزره",
+        "تجوّل": "لا شيء يشدّه بعينه — يتمشّى",
+    }
+    print(f"\nمزاجه : {d.mood()}")
+    print(f"يريد  : {urge} — {meaning.get(urge, '')}")
+    print(f"أسئلته المفتوحة: {open_q}")
+    if p.obsessions:
+        print(f"وهواجسه الثابتة: {'، '.join(p.obsessions)}")
+    if p.aspiration:
+        print(f"وتحت ذلك كله: {p.aspiration}")
+    return 0
+
+
+def cmd_questions(args: argparse.Namespace) -> int:
+    """ما مرّ به ولم يعرفه — وما أغلقه أخيراً."""
+    with Body() as b:
+        if args.answered:
+            rows = b.conn.execute(
+                """SELECT q.term, q.lang, q.answered_at, m.title, m.source_url
+                   FROM questions q LEFT JOIN memories m ON m.id = q.answer
+                   WHERE q.status='answered'
+                   ORDER BY q.answered_at DESC LIMIT ?""", (args.limit,)).fetchall()
+            if not rows:
+                print("لم يغلق سؤالاً بعد.")
+                return 1
+            for r in rows:
+                print(f"\n✓ [{r['lang']}] {r['term']}   ({_when(r['answered_at'])})")
+                if r["title"]:
+                    print(f"    أجابه: {r['title'][:70]}")
+                    if r["source_url"]:
+                        print(f"    ← {r['source_url']}")
+            return 0
+
+        rows = b.conn.execute(
+            """SELECT term, lang, asked_at, attempts, context FROM questions
+               WHERE status='open' ORDER BY attempts ASC, asked_at ASC LIMIT ?""",
+            (args.limit,)).fetchall()
+        if not rows:
+            print("لا سؤال معلّقاً عنده الآن.")
+            return 1
+        for r in rows:
+            chased = f"طاردَه {r['attempts']} مرّة" if r["attempts"] else "لم يطارده بعد"
+            print(f"\n؟ [{r['lang']}] {r['term']}   ({chased})")
+            if r["context"]:
+                print(f"    صادفه في: {r['context'][:70]}")
+    return 0
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     with Body() as b:
         st = b.stats()
@@ -301,6 +376,8 @@ def cmd_status(args: argparse.Namespace) -> int:
     print(f"ذكريات : {st['memories']}" +
           (f"  (منها {st['papers']} ورقة بحث)" if st.get("papers") else ""))
     print(f"فضول   : {st['interests']} مصطلحاً")
+    print(f"أسئلة  : {st['questions_open']} مفتوح • "
+          f"{st['questions_answered']} أُجيب")
     if st["by_lang"]:
         print("لغاته  : " + "، ".join(f"{k}={v}" for k, v in st["by_lang"].items()))
     if interests:
@@ -422,6 +499,14 @@ def build_parser() -> argparse.ArgumentParser:
                    help="يغيّر التوزيع: متوازن | العالم | اسم إقليم")
     p.add_argument("-n", "--limit", type=int, default=20)
     p.set_defaults(fn=cmd_langs)
+
+    p = sub.add_parser("drives", help="دوافعه الآن: ما الذي يحرّكه وماذا يريد")
+    p.set_defaults(fn=cmd_drives)
+
+    p = sub.add_parser("questions", help="أسئلته المعلّقة")
+    p.add_argument("--answered", action="store_true", help="ما أغلقه بدل ما فتحه")
+    p.add_argument("-n", "--limit", type=int, default=12)
+    p.set_defaults(fn=cmd_questions)
 
     p = sub.add_parser("status", help="حالة الجسد")
     p.set_defaults(fn=cmd_status)

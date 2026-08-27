@@ -14,6 +14,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from rooh import lang, languages, research, senses, sources   # noqa: E402
+from rooh.drives import Drives                 # noqa: E402
 from rooh.body import Body                       # noqa: E402
 from rooh.mind import Mind                       # noqa: E402
 from rooh.net import Fetcher                     # noqa: E402
@@ -517,6 +518,133 @@ class TestResearch(unittest.TestCase):
         self.assertEqual(len(found), 1)
 
 
+# ── الدوافع ──────────────────────────────────────────────────────────────
+class TestDrives(unittest.TestCase):
+    def test_learning_peaks_between_the_familiar_and_the_strange(self) -> None:
+        """لا المألوف ولا الغريب يعلّمان؛ ما بينهما يعلّم."""
+        self.assertAlmostEqual(Drives.learning(0.0, 0.5), 0.0, places=2)
+        self.assertAlmostEqual(Drives.learning(1.0, 0.5), 0.0, places=2)
+        self.assertGreater(Drives.learning(0.45, 0.5), 0.8)
+
+    def test_openness_shifts_where_he_learns(self) -> None:
+        strange = 0.8
+        self.assertGreater(Drives.learning(strange, openness=0.9),
+                           Drives.learning(strange, openness=0.1))
+        familiar = 0.2
+        self.assertGreater(Drives.learning(familiar, openness=0.1),
+                           Drives.learning(familiar, openness=0.9))
+
+    def test_novelty_measure(self) -> None:
+        known = {"a", "b"}
+        self.assertEqual(Drives.novelty(["a", "b"], known), 0.0)
+        self.assertEqual(Drives.novelty(["x", "y"], known), 1.0)
+        self.assertEqual(Drives.novelty(["a", "x"], known), 0.5)
+        self.assertEqual(Drives.novelty([], known), 0.0)
+
+    def test_familiar_pages_breed_boredom(self) -> None:
+        d = Drives()
+        for _ in range(6):
+            d.observe(novelty=0.02)
+        self.assertGreater(d.boredom, 0.6)
+        self.assertEqual(d.urge(), "غريب")
+        self.assertEqual(d.mood(), "ضجِر")
+
+    def test_strange_pages_breed_confusion_and_send_him_home(self) -> None:
+        d = Drives()
+        for _ in range(8):
+            d.observe(novelty=0.98, openness=0.2)
+        self.assertGreater(d.confusion, 0.6)
+        self.assertEqual(d.urge(), "مألوف")
+
+    def test_the_open_stay_calm_where_the_guarded_get_lost(self) -> None:
+        """الانفتاح ليس رقماً معروضاً: يغيّر ما يحدث له أمام الغريب."""
+        guarded, open_ = Drives(), Drives()
+        for _ in range(8):
+            guarded.observe(novelty=0.95, openness=0.1)
+            open_.observe(novelty=0.95, openness=0.9)
+        self.assertGreater(guarded.confusion, open_.confusion)
+
+    def test_fatigue_accumulates_then_clears_with_rest(self) -> None:
+        d = Drives()
+        for _ in range(20):
+            d.observe(novelty=0.5)
+        self.assertEqual(d.urge(), "عودة")
+        d.rest()
+        self.assertEqual(d.fatigue, 0.0)
+        self.assertNotEqual(d.urge(), "عودة")
+
+    def test_rest_dims_but_does_not_erase(self) -> None:
+        d = Drives(boredom=0.9, confusion=0.8)
+        d.rest()
+        self.assertLess(d.boredom, 0.9)
+        self.assertGreater(d.boredom, 0.0)
+
+    def test_questions_create_longing_and_answers_relieve_it(self) -> None:
+        d = Drives()
+        d.feel_questions(10, persistence=0.9)
+        self.assertGreater(d.longing, 0.5)
+        self.assertEqual(d.urge(has_questions=True), "سؤال")
+        before = d.longing
+        d.answered()
+        self.assertLess(d.longing, before)
+
+    def test_persistence_changes_how_soon_he_longs(self) -> None:
+        patient, restless = Drives(), Drives()
+        patient.feel_questions(5, persistence=0.9)
+        restless.feel_questions(5, persistence=0.1)
+        self.assertGreater(patient.longing, restless.longing)
+
+    def test_urge_priority_tiredness_first(self) -> None:
+        """من أنهكه الطريق لا ينفعه سؤالٌ ولا غريب."""
+        d = Drives(fatigue=0.95, boredom=1.0, confusion=1.0, longing=1.0)
+        self.assertEqual(d.urge(has_questions=True), "عودة")
+
+    def test_state_survives_between_journeys(self) -> None:
+        d = Drives(boredom=0.71, confusion=0.33)
+        back = Drives.loads(d.dumps())
+        self.assertAlmostEqual(back.boredom, 0.71)
+        self.assertAlmostEqual(back.confusion, 0.33)
+
+    def test_corrupt_state_falls_back_to_fresh(self) -> None:
+        for raw in (None, "", "{", '{"boredom": "كثير"}', "[]"):
+            d = Drives.loads(raw)
+            self.assertTrue(0.0 <= d.boredom <= 1.0)
+
+    def test_values_never_leave_their_range(self) -> None:
+        d = Drives()
+        for _ in range(200):
+            d.observe(novelty=0.0)
+            d.observe(novelty=1.0)
+            d.answered()
+        for name, value in vars(d).items():
+            self.assertTrue(0.0 <= value <= 1.0, f"{name}={value}")
+
+
+# ── الرغبات ──────────────────────────────────────────────────────────────
+class TestDesires(unittest.TestCase):
+    def test_obsessions_are_always_wanted(self) -> None:
+        p = Personality.default()
+        p.obsessions = ["الوعي", "الزمن"]
+        p.aspiration = ""
+        self.assertEqual(sorted(p.wants()), ["الزمن", "الوعي"])
+
+    def test_aversion_blocks_a_topic_everywhere(self) -> None:
+        p = Personality.default()
+        p.aversions = ["السياسة"]
+        p.obsessions = ["السياسة الدولية", "الفلك"]
+        p.aspiration = "تاريخ السياسة"       # الطموح رغبة، فينطبق عليه النفور
+        self.assertTrue(p.repels("أخبار السياسة"))
+        self.assertEqual(p.wants(), ["الفلك"])
+        self.assertTrue(p.is_blocked("x.com", "تحليل السياسة اليوم"))
+
+    def test_persistence_sets_how_long_he_chases(self) -> None:
+        p = Personality.default()
+        p.persistence = 1.0
+        stubborn = p.max_question_attempts
+        p.persistence = 0.0
+        self.assertGreater(stubborn, p.max_question_attempts)
+
+
 # ── الرحلة كاملة ─────────────────────────────────────────────────────────
 class TestJourney(unittest.TestCase):
     def setUp(self) -> None:
@@ -709,6 +837,149 @@ class TestJourney(unittest.TestCase):
             with patch.object(research, "search_papers", return_value=[]) as stub:
                 w.journey(pages=3, only_lang="ru")
             self.assertEqual(stub.call_count, 1, "سُئلت القاعدة أكثر من مرّة")
+
+    def test_repetition_actually_bores_him(self) -> None:
+        """انحدار: كان يسجّل ٦ مفاتيح ويقيس الجِدّة على ١٢، فتجمّدت على
+        ٠٫٥ إلى الأبد وصار الملل مستحيلاً بنيوياً."""
+        with LocalNet() as base:
+            first = self._wanderer(base)
+            first.journey(pages=4)
+            self.assertLess(first.drives.boredom, 0.75)
+            for _ in range(3):
+                w = self._wanderer(base)
+                w.journey(pages=4)
+        self.assertGreater(w.drives.boredom, 0.75, "قرأ نفسه مراراً ولم يملّ")
+        self.assertEqual(w.drives.mood(), "ضجِر")
+
+    def test_boredom_changes_where_he_goes(self) -> None:
+        """المزاج ليس زينة: الضجر يبدّل الوجهة فعلاً."""
+        with LocalNet() as base:
+            for _ in range(4):
+                w = self._wanderer(base)
+                rep = w.journey(pages=4)
+        self.assertIn("غريب", rep.urges)
+
+    def test_mood_is_derived_not_drawn_by_lot(self) -> None:
+        with LocalNet() as base:
+            w = self._wanderer(base)
+            w.drives.confusion = 0.9
+            rep = w.journey(pages=1)
+        self.assertEqual(rep.mood, w.drives.mood())
+
+    def test_exhaustion_ends_the_journey_early(self) -> None:
+        """التعب يتراكم داخل الرحلة نفسها — ينام قبلها فيبدأ صافياً."""
+        with LocalNet() as base:
+            w = self._wanderer(base)
+            w.drives.fatigue = 0.95
+            rep = w.journey(pages=1)
+            self.assertFalse(rep.came_home_early, "لم ينم قبل أن يخرج")
+
+            long_walk = self._wanderer(base)
+            rep = long_walk.journey(pages=30)    # أطول ممّا يحتمل
+        self.assertTrue(rep.came_home_early)
+        self.assertLess(rep.stored, 30)
+        self.assertGreater(long_walk.drives.fatigue, 0.8)
+
+    def test_drives_persist_across_journeys(self) -> None:
+        with LocalNet() as base:
+            first = self._wanderer(base)
+            first.journey(pages=3)
+            saved = first.drives.boredom
+            second = self._wanderer(base)
+        # الرحلة الجديدة تبدأ من حيث انتهت السابقة (بعد راحة تخفّف لا تمحو)
+        self.assertGreater(second.drives.boredom, 0.0)
+        self.assertLessEqual(second.drives.boredom, saved + 0.01)
+
+    def test_he_opens_questions_about_what_he_did_not_know(self) -> None:
+        with LocalNet() as base:
+            w = self._wanderer(base)
+            rep = w.journey(pages=3)
+        self.assertTrue(rep.asked, "قرأ ثلاث صفحات ولم يستوقفه شيء")
+        # والصينية تُسأل كغيرها: «量子» مصطلحٌ لا شظيّة
+        self.assertTrue(all(len(t) >= 2 for t in rep.asked))
+        # كل ما سأله مسجّل، سواء بقي مفتوحاً أم أجابته صفحة تالية
+        total = self.body.conn.execute(
+            "SELECT COUNT(*) c FROM questions").fetchone()["c"]
+        self.assertGreaterEqual(total, len(rep.asked))
+
+    def test_a_passing_mention_is_not_an_answer(self) -> None:
+        """السؤال لا يُغلق بورود المصطلح، بل بأن تكون الصفحة عنه."""
+        self.body.ask("كلمة نادرة", "ar")
+        mid = self.body.remember(title="ذكرى", summary="s", lang="ar")
+        marginal = ["أول", "ثاني", "ثالث", "رابع", "خامس", "سادس", "كلمة نادرة"]
+        self.assertEqual(self.body.resolve_by_keywords(marginal, "ar", mid), [])
+        self.assertEqual(self.body.count_open_questions(), 1)
+        central = ["كلمة نادرة", "أول", "ثاني"]
+        self.assertEqual(self.body.resolve_by_keywords(central, "ar", mid),
+                         ["كلمة نادرة"])
+        self.assertEqual(self.body.count_open_questions(), 0)
+
+    def test_he_returns_to_chase_yesterdays_question(self) -> None:
+        """ما يصل رحلةً برحلة: يخرج اليوم ليكمل ما بدأه أمس."""
+        from unittest.mock import patch
+
+        self.body.ask("量子暗号", "ja")
+        self.body.ask("сверхпроводник", "ru")
+        with LocalNet() as base:
+            w = self._wanderer(base)
+            w.p.persistence = 1.0
+            chased: list[str] = []
+            w.on_event = lambda k, d: chased.append(d["term"]) if k == "chasing" else None
+            # لا نخرج إلى الشبكة في الاختبار: قواعد الأبحاث مُحاكاة
+            with patch.object(research, "search_papers", return_value=[]):
+                w.journey(pages=2)
+        self.assertTrue(chased, "لم يلتفت إلى سؤاله المعلّق")
+        attempts = self.body.conn.execute(
+            "SELECT SUM(attempts) s FROM questions").fetchone()["s"]
+        self.assertGreater(attempts or 0, 0)
+
+    def test_questions_get_closed_when_he_reads_about_them(self) -> None:
+        with LocalNet() as base:
+            w = self._wanderer(base)
+            w.journey(pages=3)
+            self.assertTrue(self.body.count_open_questions())
+            w2 = self._wanderer(base)
+            rep = w2.journey(pages=5)
+        answered = self.body.conn.execute(
+            "SELECT COUNT(*) c FROM questions WHERE status='answered'").fetchone()["c"]
+        self.assertGreater(answered, 0)
+
+    def test_a_question_chased_too_often_is_let_go(self) -> None:
+        """الإصرار الأعمى ليس مثابرة."""
+        self.body.ask("مصطلح لا يوجد", "ja")
+        qid = self.body.open_questions()[0][0]
+        for _ in range(9):
+            self.body.note_attempt(qid)
+        self.body.conn.commit()
+        with LocalNet() as base:
+            w = self._wanderer(base)
+            w.p.persistence = 0.5
+            w.journey(pages=1)
+        row = self.body.conn.execute(
+            "SELECT status FROM questions WHERE id=?", (qid,)).fetchone()
+        self.assertEqual(row["status"], "abandoned")
+
+    def test_obsessions_survive_forgetting(self) -> None:
+        """الهاجس لا يُنسى بالخفوت — هذا معنى أن يكون هاجساً."""
+        with LocalNet() as base:
+            w = self._wanderer(base)
+            w.p.obsessions = ["الوعي"]
+            w.journey(pages=2)
+            for _ in range(60):
+                self.body.decay_interests(factor=0.9)
+            w2 = self._wanderer(base)
+            w2.p.obsessions = ["الوعي"]
+            w2.journey(pages=2)
+        terms = [t for t, _lg, _w in self.body.top_interests(50)]
+        self.assertIn("الوعي", terms)
+
+    def test_aversions_never_become_questions(self) -> None:
+        with LocalNet() as base:
+            w = self._wanderer(base)
+            w.p.aversions = ["量子", "Квантовые", "الكمية", "量子計算"]
+            rep = w.journey(pages=3)
+        for term in rep.asked:
+            self.assertFalse(w.p.repels(term), term)
 
     def test_blocked_host_is_respected(self) -> None:
         with LocalNet() as base:

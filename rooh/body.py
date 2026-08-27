@@ -82,6 +82,23 @@ CREATE TABLE IF NOT EXISTS interests (
 );
 CREATE INDEX IF NOT EXISTS idx_interests_weight ON interests(weight DESC);
 
+-- أسئلة فتحها ولم يغلقها: مصطلحٌ مرّ به ولم يعرفه.
+-- هذا ما يصل رحلةً برحلة: يعود غداً ليكمل ما بدأه أمس.
+CREATE TABLE IF NOT EXISTS questions (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    term        TEXT NOT NULL,
+    lang        TEXT NOT NULL DEFAULT 'mul',
+    asked_at    REAL NOT NULL,
+    from_memory INTEGER REFERENCES memories(id),
+    context     TEXT,
+    status      TEXT NOT NULL DEFAULT 'open',   -- open | answered | abandoned
+    attempts    INTEGER NOT NULL DEFAULT 0,
+    answered_at REAL,
+    answer      INTEGER REFERENCES memories(id),
+    UNIQUE (term, lang)
+);
+CREATE INDEX IF NOT EXISTS idx_q_status ON questions(status, asked_at);
+
 -- يوميّات العودة: ما يكتبه بصوته هو بعد كل رحلة
 CREATE TABLE IF NOT EXISTS journal (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -350,10 +367,16 @@ class Body:
             ).fetchall()
         return [(r["term"], r["lang"], r["weight"]) for r in rows]
 
+    #: تحت هذا الوزن يُنسى المصطلح تماماً. منخفضٌ عمداً: ما قرأه مرّة
+    #: يبقى معروفاً عنده عشرات الرحلات قبل أن يُمحى، وإلا لعاد كل شيء
+    #: جديداً في كل مرّة فلم يملّ أبداً.
+    FORGET_BELOW = 0.02
+
     def decay_interests(self, factor: float = 0.97) -> None:
         """ما لا يُغذّى يخفت. هذا ما يجعل الفضول يتحرّك بدل أن يتجمّد."""
         self.conn.execute("UPDATE interests SET weight = weight * ?", (factor,))
-        self.conn.execute("DELETE FROM interests WHERE weight < 0.05")
+        self.conn.execute("DELETE FROM interests WHERE weight < ?",
+                          (self.FORGET_BELOW,))
         self.conn.commit()
 
     # ── اليوميّات ────────────────────────────────────────────────────────
@@ -370,6 +393,99 @@ class Body:
         ).fetchall()
         return [(r["created_at"], r["entry"]) for r in rows]
 
+    # ── الأسئلة المعلّقة ─────────────────────────────────────────────────
+    def ask(self, term: str, lang: str = "mul", context: str = "",
+            from_memory: Optional[int] = None) -> bool:
+        """يفتح سؤالاً. يعيد False لو كان مفتوحاً أو مُجاباً من قبل."""
+        try:
+            self.conn.execute(
+                """INSERT INTO questions(term, lang, asked_at, from_memory, context)
+                   VALUES(?,?,?,?,?)""",
+                (term, lang, time.time(), from_memory, context[:300]),
+            )
+            self.conn.commit()
+            return True
+        except sqlite3.IntegrityError:
+            return False
+
+    def open_questions(self, limit: int = 10, lang: Optional[str] = None
+                       ) -> list[tuple[int, str, str, int]]:
+        """أسئلته المفتوحة، الأقلّ محاولةً أولاً — حتى لا يطارد سؤالاً واحداً أبداً."""
+        sql = """SELECT id, term, lang, attempts FROM questions WHERE status='open'"""
+        args: list = []
+        if lang:
+            sql += " AND lang=?"
+            args.append(lang)
+        sql += " ORDER BY attempts ASC, asked_at ASC LIMIT ?"
+        args.append(limit)
+        return [(r["id"], r["term"], r["lang"], r["attempts"])
+                for r in self.conn.execute(sql, args).fetchall()]
+
+    def count_open_questions(self) -> int:
+        return int(self.conn.execute(
+            "SELECT COUNT(*) FROM questions WHERE status='open'").fetchone()[0])
+
+    def note_attempt(self, question_id: int) -> None:
+        self.conn.execute(
+            "UPDATE questions SET attempts = attempts + 1 WHERE id=?", (question_id,))
+
+    def answer_question(self, term: str, lang: str, memory_id: int) -> bool:
+        """يغلق سؤالاً لأن ذكرى جديدة أجابته."""
+        cur = self.conn.execute(
+            """UPDATE questions SET status='answered', answered_at=?, answer=?
+               WHERE status='open' AND term=? AND (lang=? OR lang='mul')""",
+            (time.time(), memory_id, term, lang),
+        )
+        self.conn.commit()
+        return cur.rowcount > 0
+
+    #: كم مفتاحاً من رأس الصفحة نعدّه «محور الصفحة». السؤال لا يُغلق
+    #: بمجرّد ورود المصطلح في الصفحة — الورود ليس جواباً — بل بأن تكون
+    #: الصفحة عنه.
+    PROMINENT = 5
+
+    def resolve_by_keywords(self, keywords: list[str], lang: str,
+                            memory_id: int) -> list[str]:
+        """أيّ أسئلة أغلقتها هذه الصفحة؟ يعيد المصطلحات التي أُجيبت."""
+        if not keywords:
+            return []
+        lowered = {k.lower(): k for k in keywords[: self.PROMINENT]}
+        rows = self.conn.execute(
+            "SELECT term FROM questions WHERE status='open'").fetchall()
+        closed: list[str] = []
+        for r in rows:
+            if r["term"].lower() in lowered:
+                if self.answer_question(r["term"], lang, memory_id):
+                    closed.append(r["term"])
+        return closed
+
+    def abandon_stale_questions(self, max_attempts: int = 5) -> int:
+        """سؤالٌ طورد كثيراً بلا جواب يُترك. الإصرار الأعمى ليس مثابرة."""
+        cur = self.conn.execute(
+            "UPDATE questions SET status='abandoned' WHERE status='open' AND attempts>=?",
+            (max_attempts,),
+        )
+        self.conn.commit()
+        return cur.rowcount
+
+    # ── الدوافع ──────────────────────────────────────────────────────────
+    def save_drives(self, raw: str) -> None:
+        self.conn.execute(
+            "INSERT OR REPLACE INTO meta(key, value) VALUES('drives', ?)", (raw,))
+        self.conn.commit()
+
+    def load_drives(self) -> Optional[str]:
+        row = self.conn.execute(
+            "SELECT value FROM meta WHERE key='drives'").fetchone()
+        return row[0] if row else None
+
+    def known_terms(self, limit: int = 50_000) -> set[str]:
+        """ما يعرفه، كما تمثّله خريطة فضوله. به يقيس جِدّة كل صفحة."""
+        rows = self.conn.execute(
+            "SELECT term FROM interests ORDER BY weight DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return {r["term"].lower() for r in rows}
+
     # ── حالة الجسد ───────────────────────────────────────────────────────
     def stats(self) -> dict[str, Any]:
         one = lambda q: self.conn.execute(q).fetchone()[0]  # noqa: E731
@@ -385,6 +501,10 @@ class Body:
             "memories": one("SELECT COUNT(*) FROM memories"),
             "papers": one("SELECT COUNT(*) FROM memories WHERE kind='paper'"),
             "interests": one("SELECT COUNT(*) FROM interests"),
+            "questions_open": one(
+                "SELECT COUNT(*) FROM questions WHERE status='open'"),
+            "questions_answered": one(
+                "SELECT COUNT(*) FROM questions WHERE status='answered'"),
             "born_at": float(born[0]) if born else None,
             "by_lang": {r["lang"]: r["c"] for r in langs},
         }

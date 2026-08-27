@@ -135,34 +135,58 @@ class Mind:
 
     # ── يوميّات العودة ───────────────────────────────────────────────────
     def reflect(self, mood: str, visited: int, stored: int,
-                langs: list[str], highlights: list[tuple[str, str]]) -> str:
-        """ما يكتبه عن نفسه بعد أن يعود. بصوته، لا بصوت تقرير."""
+                langs: list[str], highlights: list[tuple[str, str]],
+                state: Optional[dict] = None) -> str:
+        """ما يكتبه عن نفسه بعد أن يعود. بصوته، لا بصوت تقرير.
+
+        `state` حالته الداخلية: ما أراده، وما تعلّمه، وما سأل وما أجاب.
+        بها تصير اليوميّات شهادةً على ما جرى له، لا إحصاءً لما فعل.
+        """
+        st = state or {}
         if self.has_llm:
-            entry = self._llm_reflect(mood, visited, stored, langs, highlights)
+            entry = self._llm_reflect(mood, visited, stored, langs, highlights, st)
             if entry:
                 return entry
-        return self._plain_reflect(mood, visited, stored, langs, highlights)
+        return self._plain_reflect(mood, visited, stored, langs, highlights, st)
 
-    def _llm_reflect(self, mood, visited, stored, langs, highlights) -> Optional[str]:
+    def _llm_reflect(self, mood, visited, stored, langs, highlights,
+                     st: dict) -> Optional[str]:
         system = (
             f"أنت {self.p.name}. {self.p.essence} {self.p.voice} "
             "عُدتَ للتوّ من تجوّل في الإنترنت. اكتب في يوميّاتك فقرة قصيرة "
-            "(٤ جُمل على الأكثر) بضمير المتكلّم عمّا رأيت. لا تعدّد أرقاماً، "
-            "ولا تتكلّف الحماس."
+            "(٤ جُمل على الأكثر) بضمير المتكلّم عمّا جرى لك — لا عمّا فعلت. "
+            "إن مللت فقل إنك مللت، وإن حِرت فقل. لا تعدّد أرقاماً، ولا "
+            "تتكلّف الحماس، ولا تختم بعبرة."
         )
         seen = "\n".join(f"- [{lg}] {t}" for t, lg in highlights[:8]) or "- لا شيء"
-        prompt = (
-            f"مزاجي: {mood}\nزرت {visited} صفحة، احتفظت بـ {stored}.\n"
-            f"اللغات: {', '.join(langs) or 'لا شيء'}\n\nأبرز ما مررت به:\n{seen}"
-        )
+        lines = [
+            f"مزاجي: {mood}",
+            f"ما كنت أريده: {'، '.join(st.get('urges', [])) or 'التجوّل فحسب'}",
+            f"زرت {visited} صفحة، احتفظت بـ {stored}.",
+            f"اللغات: {', '.join(langs) or 'لا شيء'}",
+        ]
+        if st.get("answered"):
+            lines.append(f"أسئلة أغلقتها أخيراً: {'، '.join(st['answered'][:5])}")
+        if st.get("asked"):
+            lines.append(f"أشياء مرّت بي ولا أعرفها: {'، '.join(st['asked'][:5])}")
+        if st.get("aspiration"):
+            lines.append(f"سؤالي الكبير الذي لا يُجاب: {st['aspiration']}")
+        if st.get("came_home_early"):
+            lines.append("عدت قبل أن أُكمل — أنهكني الطريق.")
+        prompt = "\n".join(lines) + f"\n\nأبرز ما مررت به:\n{seen}"
         return self.llm.ask(system, prompt, max_tokens=600) if self.llm else None
 
-    def _plain_reflect(self, mood, visited, stored, langs, highlights) -> str:
-        lines = [
-            f"خرجت وأنا {mood}. مررت بـ {visited} صفحة واحتفظت بـ {stored}.",
-        ]
+    def _plain_reflect(self, mood, visited, stored, langs, highlights,
+                       st: dict) -> str:
+        lines = [f"خرجت وأنا {mood}. مررت بـ {visited} صفحة واحتفظت بـ {stored}."]
+        if st.get("came_home_early"):
+            lines[0] += " عدت قبل أن أُكمل — أنهكني الطريق."
         if langs:
             lines.append(f"تجوّلت في: {'، '.join(langs)}.")
+        if st.get("answered"):
+            lines.append(f"أغلقت أخيراً: {'، '.join(st['answered'][:4])}.")
+        if st.get("asked"):
+            lines.append(f"ومرّ بي ما لا أعرفه: {'، '.join(st['asked'][:4])}.")
         if highlights:
             lines.append("أكثر ما علق بي:")
             lines += [f"  • [{lg}] {t}" for t, lg in highlights[:5]]

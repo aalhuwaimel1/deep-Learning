@@ -26,6 +26,19 @@ DEFAULT_PERSONALITY: dict = {
     "language_profile": "متوازن",
     "languages": language_profile("متوازن"),
     "seed_interests": ["الذكاء الاصطناعي", "التاريخ", "الفلسفة", "الفلك", "اللغات"],
+
+    # ── رغباته الخاصة: ما يخصّه هو، ولا يتغيّر بتغيّر الرحلات ──────────
+    # هواجس: لا ينساها أبداً مهما خفتت. يعود إليها من حيث لا يقصد.
+    "obsessions": ["الوعي", "الزمن"],
+    # نفور: لا يقترب منها ولو صادفها.
+    "aversions": [],
+    # طموح: سؤال كبير يعيش تحت كل رحلاته، لا يُجاب في يوم.
+    "aspiration": "كيف تختلف الثقافات في فهمها للأشياء نفسها؟",
+    # انفتاح: كم يحتمل الغريب. المرتفع يتعلّم من الأبعد، والمنخفض يحتاج
+    # أرضاً مألوفة ليربط عليها. يزحزح ذروة منحنى التعلّم.
+    "openness": 0.6,
+    # مثابرة: كم يلاحق سؤالاً فتحه قبل أن يتركه.
+    "persistence": 0.6,
     # حدود أخلاقية وتقنية للتجوّل
     "limits": {
         "pages_per_journey": 12,
@@ -47,6 +60,11 @@ class Personality:
     depth: float = 0.6
     research_bias: float = 0.35
     language_profile: str = "متوازن"
+    obsessions: list[str] = field(default_factory=list)
+    aversions: list[str] = field(default_factory=list)
+    aspiration: str = ""
+    openness: float = 0.6
+    persistence: float = 0.6
     moods: list[str] = field(default_factory=list)
     languages: dict[str, float] = field(default_factory=dict)
     seed_interests: list[str] = field(default_factory=list)
@@ -101,10 +119,33 @@ class Personality:
             if h and h.lower() in host.lower():
                 return True
         low = text.lower()
-        for t in self.limits.get("blocked_terms", []):
+        for t in list(self.limits.get("blocked_terms", [])) + list(self.aversions):
             if t and t.lower() in low:
                 return True
         return False
+
+    # ── الرغبات ──────────────────────────────────────────────────────────
+    def repels(self, term: str) -> bool:
+        """هل ينفر من هذا؟ يُطبَّق على البذور والأسئلة والمفاتيح."""
+        low = term.lower()
+        return any(a and a.lower() in low for a in self.aversions)
+
+    def wants(self, rng: Optional[random.Random] = None) -> list[str]:
+        """ما يريد أن يبحث عنه من نفسه، بلا مؤثّر خارجي.
+
+        هواجسه دائماً، وطموحه أحياناً — لأن الطموح سؤالٌ لا يُطرق كل يوم.
+        """
+        r = rng or random
+        out = [o for o in self.obsessions if not self.repels(o)]
+        if self.aspiration and not self.repels(self.aspiration) \
+                and r.random() < 0.35:
+            out.append(self.aspiration)
+        return out
+
+    @property
+    def max_question_attempts(self) -> int:
+        """المثابر يطارد سؤاله أطول. والإصرار الأعمى ليس مثابرة، فله سقف."""
+        return 2 + round(6 * max(0.0, min(1.0, self.persistence)))
 
     def describe(self) -> str:
         from .languages import arabic_name
@@ -116,8 +157,12 @@ class Personality:
             f"{self.name} — {self.essence}\n"
             f"طباعه: {traits}\n"
             f"صوته: {self.voice}\n"
-            f"فضوله: {self.curiosity:.2f} | عمقه: {self.depth:.2f} | "
-            f"نزوعه للأبحاث: {self.research_bias:.2f}\n"
-            f"يتجوّل في {len(self.languages)} لغة ({self.language_profile})، "
+            f"فضوله: {self.curiosity:.2f} | انفتاحه: {self.openness:.2f} | "
+            f"مثابرته: {self.persistence:.2f} | نزوعه للأبحاث: "
+            f"{self.research_bias:.2f}\n"
+            + (f"هواجسه: {'، '.join(self.obsessions)}\n" if self.obsessions else "")
+            + (f"نفوره: {'، '.join(self.aversions)}\n" if self.aversions else "")
+            + (f"طموحه: {self.aspiration}\n" if self.aspiration else "")
+            + f"يتجوّل في {len(self.languages)} لغة ({self.language_profile})، "
             f"أكثرها: {langs}"
         )
