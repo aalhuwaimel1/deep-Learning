@@ -8,7 +8,7 @@ import sys
 import time
 from typing import Optional
 
-from . import config, languages, research, sources
+from . import config, insight, languages, research, sources
 from .body import Body
 from .drives import Drives
 from .mind import LLM, Mind, describe_backend
@@ -365,6 +365,125 @@ def cmd_questions(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_compare(args: argparse.Namespace) -> int:
+    """كيف يرى كل عالَمٍ لغويٍّ هذا الموضوع — وبماذا ينفرد كلٌّ منهم."""
+    p = Personality.load()
+    concept = " ".join(args.term)
+    langs = args.lang or sorted(p.languages, key=p.languages.get, reverse=True)[:10]
+    f = Fetcher(respect_robots=True) if args.learn else None
+
+    with Body() as b:
+        cov = insight.coverage(b, concept, langs, fetcher=f, learn=args.learn)
+        print(insight.render_coverage(cov))
+
+        if not cov.covering:
+            print(f"\nلم يجمع شيئاً عن «{concept}» بعد.")
+            print("أرسله في رحلة أولاً:  rooh wander -n 10")
+            return 1
+
+        gaps_found = cov.real_gaps
+        if gaps_found:
+            names = "، ".join(languages.arabic_name(l) for l in gaps_found)
+            print(f"\n★ فجوة: يكتب عنه {len(cov.covering)} عالَماً، "
+                  f"ويصمت عنه: {names}")
+
+        mind = Mind(p, use_llm=not args.no_llm)
+        told = insight.synthesize(mind, cov)
+        if told:
+            print("\n" + "─" * 54)
+            print(told)
+        elif not args.no_llm:
+            print("\n(المقارنة بالنص تحتاج نموذجاً لغوياً — "
+                  "pip install anthropic)")
+    return 0
+
+
+def cmd_gaps(args: argparse.Namespace) -> int:
+    """مواضيع يكتب عنها بعض العالم وتصمت عنها لغتك."""
+    p = Personality.load()
+    langs = sorted(p.languages, key=p.languages.get, reverse=True)[:12]
+    f = Fetcher(respect_robots=True) if args.learn else None
+
+    with Body() as b:
+        found = insight.gaps(b, langs, limit=args.limit, fetcher=f,
+                             learn=args.learn)
+        concepts = len(insight.concepts_of(b, limit=100))
+
+    if not found:
+        print("لا فجوات يعرفها بعد.")
+        if concepts < 3:
+            print(f"معجمه ما زال صغيراً ({concepts} مفهوماً). الفجوة تحتاج "
+                  "مفهوماً يعرف مقابله بأكثر من لسان —")
+            print("أرسله في رحلات أكثر:  rooh live --every 60")
+        return 1
+
+    for g in found:
+        cover = "، ".join(languages.arabic_name(l) for l in g.covering)
+        miss = "، ".join(languages.arabic_name(l) for l in g.missing)
+        print(f"\n★ {g.concept}")
+        print(f"   يكتب عنه : {cover}")
+        print(f"   ويصمت عنه: {miss}")
+        for lg, title in g.sample:
+            print(f"      [{lg}] {title[:66]}")
+    print(f"\nليقرأ عنها في اللغات الصامتة: rooh wander -n 10")
+    return 0
+
+
+def cmd_brief(args: argparse.Namespace) -> int:
+    """خلاصةُ ما جدّ منذ آخر مرّة سألت. هذا ما يعطيكه ولا يعطيكه غيره."""
+    p = Personality.load()
+    langs = sorted(p.languages, key=p.languages.get, reverse=True)[:12]
+
+    with Body() as b:
+        row = b.conn.execute(
+            "SELECT value FROM meta WHERE key='last_brief'").fetchone()
+        since = float(row[0]) if row else 0.0
+        fresh = b.conn.execute(
+            """SELECT title, lang, summary, source_url, kind, created_at
+               FROM memories WHERE created_at > ?
+               ORDER BY importance DESC, created_at DESC LIMIT ?""",
+            (since, args.limit),
+        ).fetchall()
+        found_gaps = insight.gaps(b, langs, limit=4)
+        pending = b.open_questions(limit=5)
+        if not args.keep:
+            b.conn.execute(
+                "INSERT OR REPLACE INTO meta(key, value) VALUES('last_brief', ?)",
+                (str(time.time()),))
+            b.conn.commit()
+
+    when = _when(since) if since else "البداية"
+    print(f"منذ {when}\n" + "═" * 54)
+    if not fresh:
+        print("لا جديد. أرسله في رحلة:  rooh wander -n 10")
+        return 1
+
+    by_lang: dict[str, list] = {}
+    for r in fresh:
+        by_lang.setdefault(r["lang"], []).append(r)
+    for lg, rows in sorted(by_lang.items(), key=lambda kv: -len(kv[1])):
+        print(f"\n【 {languages.arabic_name(lg)} 】 {len(rows)}")
+        for r in rows[: args.per_lang]:
+            mark = "◆" if r["kind"] == "paper" else "•"
+            print(f"  {mark} {r['title'][:70]}")
+            if r["summary"]:
+                print(f"     {r['summary'][:160]}")
+            if r["source_url"]:
+                print(f"     ← {r['source_url']}")
+
+    if found_gaps:
+        print("\n" + "═" * 54 + "\n★ فجوات لغتك")
+        for g in found_gaps:
+            miss = "، ".join(languages.arabic_name(l) for l in g.missing)
+            print(f"  • {g.concept} — يصمت عنه: {miss}")
+
+    if pending:
+        print("\n؟ ما يشغله ولم يفهمه بعد")
+        for _qid, term, lg, _a in pending:
+            print(f"  • [{lg}] {term}")
+    return 0
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     with Body() as b:
         st = b.stats()
@@ -507,6 +626,26 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--answered", action="store_true", help="ما أغلقه بدل ما فتحه")
     p.add_argument("-n", "--limit", type=int, default=12)
     p.set_defaults(fn=cmd_questions)
+
+    p = sub.add_parser("compare", help="كيف يرى كل عالَمٍ لغويٍّ موضوعاً واحداً")
+    p.add_argument("term", nargs="+")
+    p.add_argument("--lang", action="append", help="يقصر المقارنة على لغات بعينها")
+    p.add_argument("--learn", action="store_true",
+                   help="يخرج للشبكة ليتعلّم المقابلات الناقصة")
+    p.add_argument("--no-llm", action="store_true")
+    p.set_defaults(fn=cmd_compare)
+
+    p = sub.add_parser("gaps", help="مواضيع يكتب عنها العالم وتصمت عنها لغتك")
+    p.add_argument("-n", "--limit", type=int, default=8)
+    p.add_argument("--learn", action="store_true")
+    p.set_defaults(fn=cmd_gaps)
+
+    p = sub.add_parser("brief", help="خلاصة ما جدّ منذ آخر مرّة سألت")
+    p.add_argument("-n", "--limit", type=int, default=40)
+    p.add_argument("--per-lang", type=int, default=4)
+    p.add_argument("--keep", action="store_true",
+                   help="لا يحرّك العلامة، فتراها ثانيةً في المرّة القادمة")
+    p.set_defaults(fn=cmd_brief)
 
     p = sub.add_parser("status", help="حالة الجسد")
     p.set_defaults(fn=cmd_status)

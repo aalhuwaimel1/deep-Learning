@@ -39,6 +39,9 @@ DEFAULT_PERSONALITY: dict = {
     "openness": 0.6,
     # مثابرة: كم يلاحق سؤالاً فتحه قبل أن يتركه.
     "persistence": 0.6,
+    # خدمة: كم من تجواله يقضيه عمداً في سدّ فجواتك أنت — مواضيع يكتب
+    # عنها عالَمٌ لغويٌّ وتصمت عنها لغتك. صفر = يتجوّل لنفسه فقط.
+    "service_bias": 0.3,
     # حدود أخلاقية وتقنية للتجوّل
     "limits": {
         "pages_per_journey": 12,
@@ -65,6 +68,7 @@ class Personality:
     aspiration: str = ""
     openness: float = 0.6
     persistence: float = 0.6
+    service_bias: float = 0.3
     moods: list[str] = field(default_factory=list)
     languages: dict[str, float] = field(default_factory=dict)
     seed_interests: list[str] = field(default_factory=list)
@@ -159,7 +163,7 @@ class Personality:
             f"صوته: {self.voice}\n"
             f"فضوله: {self.curiosity:.2f} | انفتاحه: {self.openness:.2f} | "
             f"مثابرته: {self.persistence:.2f} | نزوعه للأبحاث: "
-            f"{self.research_bias:.2f}\n"
+            f"{self.research_bias:.2f} | خدمته لك: {self.service_bias:.2f}\n"
             + (f"هواجسه: {'، '.join(self.obsessions)}\n" if self.obsessions else "")
             + (f"نفوره: {'، '.join(self.aversions)}\n" if self.aversions else "")
             + (f"طموحه: {self.aspiration}\n" if self.aspiration else "")

@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Optional
 from urllib.parse import urlparse
 
-from . import config, research, senses, sources
+from . import config, insight, research, senses, sources
 from .drives import Drives
 from .body import Body
 from .mind import Mind
@@ -39,6 +39,7 @@ class JourneyReport:
     urges: list[str] = field(default_factory=list)     # ما أراده في كل خطوة
     asked: list[str] = field(default_factory=list)     # أسئلة فتحها
     answered: list[str] = field(default_factory=list)  # أسئلة أغلقها
+    filled: list[tuple[str, str]] = field(default_factory=list)  # فجوات سدّها
     came_home_early: bool = False                      # عاد تعباً لا مكتفياً
 
 
@@ -68,6 +69,8 @@ class Wanderer:
         self._no_papers: set[str] = set()       # لغات لم تُجدِ فيها قواعد الأبحاث
         # حالته الداخلية، محفوظة في الجسد بين الرحلات
         self.drives = Drives.loads(self.body.load_drives())
+        # فجواتٌ ينوي سدّها في هذه الرحلة: (مفهوم، لغةٌ تصمت عنه)
+        self._gaps: list[tuple[str, str]] = []
 
     # ── الرحلة ───────────────────────────────────────────────────────────
     def journey(self, pages: Optional[int] = None,
@@ -89,6 +92,10 @@ class Wanderer:
                                    self.body.count_open_questions()))})
 
         known = self.body.known_terms()
+        self._gaps = self._find_gaps()
+        if self._gaps:
+            self.on_event("gaps", {"count": len(self._gaps),
+                                   "first": self._gaps[0]})
         harvested: list[str] = []
         seen_langs: list[str] = []
         attempts = 0
@@ -104,12 +111,21 @@ class Wanderer:
                 report.came_home_early = True
                 self.on_event("tired", {"stored": report.stored, "of": budget})
                 break
+            # تجواله الحرّ يُسخَّر لسدّ فجواتك. لا يزاحم تعبَه ولا حيرته
+            # ولا سؤالاً معلّقاً — تلك حاجاته هو، وهذه خدمته لك.
+            if (urge in ("تجوّل", "غريب") and self._gaps and not only_lang
+                    and self.rng.random() < self.p.service_bias):
+                urge = "فجوة"
             report.urges.append(urge)
 
             lg = only_lang or self._pick_language_for(urge)
             dest = self._destination_for(urge, lg, seeds)
             if dest is None:
+                if urge == "فجوة" and self._gaps:
+                    self._gaps.pop(0)     # فجوةٌ تعذّر سدّها لا نعلق عندها
                 continue
+            if urge == "فجوة":
+                lg = dest.lang
             if self.body.has_seen(dest.url):
                 continue
 
@@ -189,6 +205,10 @@ class Wanderer:
                                       "gain": round(gain, 2),
                                       "mood": self.drives.mood()})
             report.stored += 1
+            if urge == "فجوة" and self._gaps:
+                concept, _lang = self._gaps.pop(0)
+                report.filled.append((concept, page_lang))
+                self.on_event("filled", {"concept": concept, "lang": page_lang})
             report.highlights.append((title, page_lang))
             if page_lang not in seen_langs:
                 seen_langs.append(page_lang)
@@ -211,6 +231,7 @@ class Wanderer:
             report.highlights,
             state={"urges": list(dict.fromkeys(report.urges)),
                    "asked": report.asked, "answered": report.answered,
+                   "filled": [c for c, _lg in report.filled],
                    "aspiration": self.p.aspiration,
                    "came_home_early": report.came_home_early},
         )
@@ -222,6 +243,36 @@ class Wanderer:
         return report
 
     # ── ترجمة النزوع إلى فعل ─────────────────────────────────────────────
+    def _find_gaps(self) -> list[tuple[str, str]]:
+        """مواضيع يكتب عنها عالَمٌ لغويٌّ وتصمت عنها لغاتٌ يزورها كثيراً.
+
+        بلا شبكة: يعمل بما في معجمه وما جمعه. أوّل رحلاته لا فجوات فيها
+        لأن معجمه فارغ — وهذا صحيح، لا نصطنع له فجوات لا يملك دليلها.
+        """
+        if self.p.service_bias <= 0:
+            return []
+        langs = list(self.p.languages)
+        out: list[tuple[str, str]] = []
+        for gap in insight.gaps(self.body, langs, limit=8):
+            for lg in gap.missing:
+                out.append((gap.concept, lg))
+        self.rng.shuffle(out)
+        return out[:12]
+
+    def _gap_destination(self) -> Optional[Destination]:
+        """يذهب إلى اللغة الصامتة ليقرأ فيها عن الموضوع — إن كان لها فيه شيء."""
+        for concept, lg in list(self._gaps):
+            term = self._term_in(lg, concept)
+            self.on_event("filling", {"concept": concept, "lang": lg,
+                                      "term": term})
+            for door in (lambda: self._search_wiki(lg, term),
+                         lambda: self._research_paper(lg, term)):
+                dest = door()
+                if dest is not None:
+                    return dest
+            self._gaps.remove((concept, lg))
+        return None
+
     def _pick_language_for(self, urge: str) -> str:
         """النزوع يختار اللسان أيضاً، لا الوجهة وحدها."""
         if urge == "مألوف":
@@ -245,7 +296,11 @@ class Wanderer:
     def _destination_for(self, urge: str, lg: str,
                          seeds: list[str]) -> Optional[Destination]:
         """كل نزوعٍ وبابه. هذا هو موضع تحوّل الحالة الداخلية إلى سلوك."""
-        if urge == "سؤال":
+        if urge == "فجوة":
+            dest = self._gap_destination()
+            if dest is not None:
+                return dest
+        elif urge == "سؤال":
             dest = self._chase_question(lg)
             if dest is not None:
                 return dest

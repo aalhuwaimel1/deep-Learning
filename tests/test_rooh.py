@@ -13,7 +13,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from rooh import lang, languages, research, senses, sources   # noqa: E402
+from rooh import insight, lang, languages, research, senses, sources   # noqa: E402
 from rooh.drives import Drives                 # noqa: E402
 from rooh.body import Body                       # noqa: E402
 from rooh.mind import Mind                       # noqa: E402
@@ -645,6 +645,107 @@ class TestDesires(unittest.TestCase):
         self.assertGreater(stubborn, p.max_question_attempts)
 
 
+# ── الاستبصار عبر اللغات ─────────────────────────────────────────────────
+class TestInsight(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.body = Body(Path(self.tmp.name) / "b.db")
+        sources.ensure_lexicon(self.body.conn)
+
+    def tearDown(self) -> None:
+        self.body.close()
+        self.tmp.cleanup()
+
+    def _learn(self, concept: str, pairs: dict) -> None:
+        for lg, dst in pairs.items():
+            self.body.conn.execute(
+                """INSERT OR REPLACE INTO lexicon
+                   (term, src_lang, dst_lang, dst_term, learned_at)
+                   VALUES(?,?,?,?,0)""", (concept, "ar", lg, dst))
+        self.body.conn.commit()
+
+    def _fill(self, lang_: str, n: int, title: str = "عام") -> None:
+        for i in range(n):
+            self.body.remember(title=f"{title} {lang_}{i}", summary="نص",
+                               lang=lang_, keywords=["عام"])
+
+    def test_coverage_matches_each_world_by_its_own_word(self) -> None:
+        self._learn("شيخوخة السكان",
+                    {"ja": "人口高齢化", "zh": "人口老龄化", "ar": "شيخوخة السكان"})
+        self.body.remember(title="人口高齢化と地方経済", summary="分析",
+                           lang="ja", keywords=["人口高齢化"])
+        self.body.remember(title="人口老龄化与养老金", summary="研究",
+                           lang="zh", keywords=["人口老龄化"])
+        cov = insight.coverage(self.body, "شيخوخة السكان", ["ja", "zh", "ar"])
+        self.assertEqual(cov.views["ja"].count, 1)
+        self.assertEqual(cov.views["zh"].count, 1)
+        self.assertEqual(cov.views["ar"].count, 0)
+        self.assertEqual(sorted(cov.covering), ["ja", "zh"])
+
+    def test_a_language_he_barely_visited_is_not_a_finding(self) -> None:
+        """«لا تغطية بالكورية» خبرٌ عن العالم فقط إن كان زار الكورية.
+        وإلا فهو خبرٌ عن كسله هو، ولا يجوز عرضه كفجوة."""
+        self._learn("موضوع", {"ja": "話題", "ko": "주제", "ar": "موضوع"})
+        self.body.remember(title="話題の記事", summary="s", lang="ja",
+                           keywords=["話題"])
+        self._fill("ja", insight.MIN_PRESENCE)
+        self._fill("ar", insight.MIN_PRESENCE)      # زار العربية كثيراً
+        self.body.remember(title="واحدة", summary="s", lang="ko")  # والكورية مرّة
+
+        cov = insight.coverage(self.body, "موضوع", ["ja", "ko", "ar"])
+        self.assertIn("ar", cov.real_gaps)          # زارها ولم يجد ⇒ فجوة
+        self.assertNotIn("ko", cov.real_gaps)       # لم يزرها ⇒ ليست فجوة
+        self.assertIn("ko", cov.unexplored)
+
+    def test_a_concept_with_no_equivalent_is_its_own_news(self) -> None:
+        self._learn("مفهوم", {"ja": "概念", "ru": None, "ar": "مفهوم"})
+        cov = insight.coverage(self.body, "مفهوم", ["ja", "ru", "ar"])
+        self.assertIn("ru", cov.untranslatable)
+        self.assertNotIn("ru", cov.real_gaps)       # لا يُحسب فجوةً تغطية
+
+    def test_gaps_rank_the_widest_first(self) -> None:
+        for lg in ("ja", "zh", "ko", "de", "ar", "en"):
+            self._fill(lg, insight.MIN_PRESENCE)
+        self._learn("واسع", {lg: f"w-{lg}" for lg in
+                             ("ja", "zh", "ko", "de", "ar", "en")})
+        self._learn("ضيّق", {lg: f"n-{lg}" for lg in ("ja", "ar", "en")})
+        for lg in ("ja", "zh", "ko", "de"):
+            self.body.remember(title=f"w-{lg} مقال", summary="s", lang=lg,
+                               keywords=[f"w-{lg}"])
+        self.body.remember(title="n-ja مقال", summary="s", lang="ja",
+                           keywords=["n-ja"])
+
+        found = insight.gaps(self.body, ["ja", "zh", "ko", "de", "ar", "en"])
+        self.assertTrue(found)
+        self.assertEqual(found[0].concept, "واسع")
+        self.assertEqual(sorted(found[0].missing), ["ar", "en"])
+
+    def test_no_lexicon_means_no_invented_gaps(self) -> None:
+        """أوّل رحلاته: معجمه فارغ. لا نصطنع فجوات لا دليل عليها."""
+        self._fill("ja", 20)
+        self._fill("ar", 20)
+        self.assertEqual(insight.concepts_of(self.body), [])
+        self.assertEqual(insight.gaps(self.body, ["ja", "ar"]), [])
+
+    def test_render_separates_what_he_knows_from_what_he_missed(self) -> None:
+        self._learn("موضوع", {"ja": "話題", "ar": "موضوع", "ko": "주제"})
+        self.body.remember(title="話題", summary="s", lang="ja", keywords=["話題"])
+        self._fill("ar", insight.MIN_PRESENCE)
+        text = insight.render_coverage(
+            insight.coverage(self.body, "موضوع", ["ja", "ar", "ko"]))
+        self.assertIn("●", text)
+        self.assertIn("لم يزرهم بما يكفي", text)
+
+    def test_no_model_means_no_invented_comparison(self) -> None:
+        """بلا نموذج لغوي نعرض الجداول ولا نؤلّف مقارنةً لا نملك أدلّتها."""
+        from rooh.mind import Mind
+
+        self._learn("موضوع", {"ja": "話題", "zh": "话题"})
+        cov = insight.coverage(self.body, "موضوع", ["ja", "zh"])
+        self.assertIsNone(insight.synthesize(Mind(Personality.default(),
+                                                  use_llm=False), cov))
+
+
 # ── الرحلة كاملة ─────────────────────────────────────────────────────────
 class TestJourney(unittest.TestCase):
     def setUp(self) -> None:
@@ -980,6 +1081,44 @@ class TestJourney(unittest.TestCase):
             rep = w.journey(pages=3)
         for term in rep.asked:
             self.assertFalse(w.p.repels(term), term)
+
+    def test_service_makes_him_go_fill_your_gaps(self) -> None:
+        """نزوع «الفجوة»: تجواله الحرّ يُسخَّر لما تصمت عنه لغتك."""
+        sources.ensure_lexicon(self.body.conn)
+        for lg, dst in (("zh", "量子计算"), ("ja", "量子計算"),
+                        ("ar", "الحوسبة الكمية"), ("ru", None)):
+            self.body.conn.execute(
+                """INSERT OR REPLACE INTO lexicon
+                   (term, src_lang, dst_lang, dst_term, learned_at)
+                   VALUES('الحوسبة الكمية','ar',?,?,0)""", (lg, dst))
+        for lg in ("zh", "ja", "ar"):
+            for i in range(insight.MIN_PRESENCE + 1):
+                self.body.remember(title=f"حشو {lg}{i}", summary="s", lang=lg)
+        self.body.remember(title="量子计算 المقال", summary="s", lang="zh",
+                           keywords=["量子计算"])
+        self.body.conn.commit()
+
+        with LocalNet() as base:
+            w = self._wanderer(base)
+            w.p.service_bias = 1.0       # كل تجواله الحرّ لك
+            filling: list[dict] = []
+            w.on_event = lambda k, d: filling.append(d) if k == "filling" else None
+            w.journey(pages=2)
+
+        self.assertTrue(w._gaps or filling, "لم يرَ الفجوة أصلاً")
+        if filling:
+            self.assertEqual(filling[0]["concept"], "الحوسبة الكمية")
+            self.assertIn(filling[0]["lang"], ("ja", "ar"))
+
+    def test_service_never_overrides_his_own_needs(self) -> None:
+        """الخدمة تملأ تجواله الحرّ، ولا تزاحم تعبه ولا حيرته ولا سؤاله."""
+        with LocalNet() as base:
+            w = self._wanderer(base)
+            w.p.service_bias = 1.0
+            w.drives.confusion = 0.9      # حائر
+            rep = w.journey(pages=2)
+        self.assertNotIn("فجوة", rep.urges)
+        self.assertIn("مألوف", rep.urges)
 
     def test_blocked_host_is_respected(self) -> None:
         with LocalNet() as base:
