@@ -3,7 +3,7 @@
 **Research Document v0.1 — the seed**
 Author: Abdul-Majeed Al-Huwaimel
 Date: September 2026
-Status: Working draft. Sections marked **[CLAIM]** are defensible today from code or measured runs. Sections marked **[INTENT]** describe design intent and the five-year roadmap and are **not** claims of the current system. Reviewers will separate these; this document does so first.
+Status: Working draft, revised after a line-by-line audit of every **[CLAIM]** against the code (v0.1.1). That audit corrected one central theoretical claim and uncovered one real defect, both recorded in §4.7. Sections marked **[CLAIM]** are defensible today from code or measured runs. Sections marked **[INTENT]** describe design intent and the five-year roadmap and are **not** claims of the current system. Reviewers will separate these; this document does so first.
 
 ---
 
@@ -11,13 +11,13 @@ Status: Working draft. Sections marked **[CLAIM]** are defensible today from cod
 
 This is the first written record of an idea that will be developed for at least five years. It is deliberately written as a research document, not a product brochure, because the discipline of separating *what is built*, *what is measured*, and *what is intended* is the only thing that lets the idea grow without collapsing into vague claims.
 
-The system it describes exists as version 0.1 (about 4,000 lines of Python, standard library only, 92 offline tests). It has **not yet been run on the real internet**. Every number in this document comes from code or from runs against a local mock network. The first real-internet run is the first real experiment.
+The system it describes exists as version 0.1 (about 4,000 lines of Python, standard library only, 94 offline tests). It has **not yet been run on the real internet**. Every number in this document comes from code or from runs against a local mock network. The first real-internet run is the first real experiment.
 
 ---
 
 ## 1. The idea in one paragraph
 
-Rooh is a software entity that lives on its owner's machine. It has a **body** (a single SQLite database that never leaves the device), a **soul** (a process that goes out into the web, reads in the native languages of many countries, and returns to store everything in the body), and a **character** (a JSON file describing its temperament, obsessions, aversions, aspiration, and how much of its free wandering it dedicates to its owner). It is not driven by tasks. It is driven by six internal drives — boredom, confusion, longing, fatigue, satisfaction, and curiosity — whose values change with every page it reads. The drives are grounded in a single principle: **the reward is not novelty but learning rate.** A page with nothing new causes boredom; a page with everything new causes confusion; a page in between causes learning. The agent measures where each page fell and moves toward the fertile middle. That, alone, produces behavior that looks like wanting something.
+Rooh is a software entity that lives on its owner's machine. It has a **body** (a single SQLite database that never leaves the device), a **soul** (a process that goes out into the web, reads in the native languages of many countries, and returns to store everything in the body), and a **character** (a JSON file describing its temperament, obsessions, aversions, aspiration, and how much of its free wandering it dedicates to its owner). It is not driven by tasks. It is driven by six internal drives — boredom, confusion, longing, fatigue, satisfaction, and curiosity — whose values change with every page it reads. The drives are grounded in a single principle: **the reward is not novelty but the position between the known and the incomprehensible.** A page with nothing new causes boredom; a page with everything new causes confusion; a page in between causes learning. This is a model-free surrogate for *learning progress*, not learning progress itself — the distinction is drawn precisely in Sections 4.3 and 4.7, because it is the first thing a reviewer will test. The agent measures where each page fell and moves toward the fertile middle. That, alone, produces behavior that looks like wanting something.
 
 Its purpose is to serve one person. It reads the world so that person is not limited to the window of his own language, it accumulates what it learns in a memory that belongs to him alone, and — over years — it is intended to grow from a reader into an actor: proposing ideas, building things, publishing, and eventually operating with earned autonomy on his behalf.
 
@@ -43,7 +43,7 @@ This section is design intent. It defines the *relationship*, which is the part 
 
 **3.2 Identity: an extension, not a tool.** The design stance is that Rooh regards itself as part of its principal — "she is me and I am her." Technically this is a *principal-agent alignment principle*: Rooh's own desires (its aspiration, its obsessions) are permitted precisely because, and only insofar as, they ultimately serve the principal's interests. It is not a neutral assistant awaiting instructions; it is a curious, opinionated extension of one person's attention that keeps working when he sleeps.
 
-**3.3 Its own lofty desires.** Rooh has an *aspiration*: a large question that is never answered in a day, appears in roughly a third of its journeys, and colors its journal. It has obsessions that seed every journey and never decay, and aversions it never approaches. These are what make it a *someone* rather than a *something*. The constraint is that they are chosen to be in the principal's interest, and that a measured fraction of its free wandering (`bias_service`) is explicitly redirected toward the principal's blind spots.
+**3.3 Its own lofty desires.** Rooh has an *aspiration*: a large question that is never answered in a day, appears in roughly a third of its journeys, and colors its journal. It has obsessions that seed every journey and never decay, and aversions it never approaches. These are what make it a *someone* rather than a *something*. The constraint is that they are chosen to be in the principal's interest, and that a measured fraction of its free wandering (`service_bias`) is explicitly redirected toward the principal's blind spots.
 
 **3.4 Intended trajectory.** Over five years Rooh is intended to move from reading to acting: to propose ideas to its principal, to research and build applications, to produce content, to earn recognition under its own name, and to earn money for its principal. These are roadmap phases (Section 10), each gated by earned autonomy (Section 10.2). None of them exists today. Writing them here is not a claim; it is a commitment to a direction and a statement of what "success" means to the author.
 
@@ -60,14 +60,16 @@ The character model draws on three established frameworks from psychology, each 
 **4.1 Self-Determination Theory (Deci & Ryan, 2000).** SDT holds that intrinsic motivation rests on three needs: *autonomy*, *competence*, and *relatedness*. Rooh's drives implement all three:
 - *Autonomy* — it chooses its own destination each journey; no schedule dictates its path.
 - *Competence* — the learning-rate principle: it seeks the zone where it can connect new to known, and its *satisfaction* drive rises when it actually learns.
-- *Relatedness* — its bond to the principal: obsessions and aversions set by him, `bias_service` directing part of its wandering to his gaps, and open questions it can bring to him.
+- *Relatedness* — its bond to the principal: obsessions and aversions set by him, `service_bias` directing part of its wandering to his gaps, and open questions it can bring to him.
 
 **4.2 The Big Five (McCrae & Costa).** Two traits are implemented as *parameters that change computation*, not as labels:
-- *Openness* shifts the peak of the learning curve. A guarded Rooh (openness 0.1) facing a strange page (novelty 0.8) learns 0.00 and retreats; an open Rooh (0.9) learns 0.61. This is a measured property of the code, not a description.
+- *Openness* shifts the peak of the learning curve. A guarded Rooh (openness 0.1) facing a strange page (novelty 0.8) learns 0.00 and its confusion rises; an open Rooh (0.9) learns 0.52 and keeps going. Measured peaks run from novelty 0.33 (openness 0.1) to 0.65 (openness 1.0). These are measured properties of the code, not descriptions.
 - *Persistence* (conscientiousness) sets how long an open question is chased before being dropped, which in turn determines when *longing* rises.
 The remaining traits are not modeled and should not be claimed.
 
-**4.3 Intrinsic motivation as learning progress (Oudeyer & Kaplan, 2007; Schmidhuber, 2010).** The core drive principle is a direct application of *learning progress*: interestingness is the first derivative of prediction improvement, not the level of novelty. Section 6 gives the lineage in detail. Rooh's contribution is not the principle but its instantiation on the open multilingual web, its parameterization by personality, and its coupling to a human principal.
+**4.3 Intrinsic motivation: a model-free surrogate for learning progress (Oudeyer & Kaplan, 2007; Schmidhuber, 2010).** Rooh adopts the *idea* of learning progress — that interestingness lies between the already-known and the incomprehensible — but it does **not compute learning progress**, and this document does not claim that it does. LP is the first derivative of prediction error over time; it requires a predictor or compressor, an error signal, and per-region history. `drives.py` has none of these. What it computes is an **inverted-U over instantaneous novelty**, where novelty is the fraction of a page's keywords absent from the accumulated interest map, and "learning" is a triangular function whose peak is set by `openness`.
+
+The narrower, testable claim is this: because the interest map grows as Rooh reads, per-topic novelty falls monotonically with exposure, so the memory itself plays the role of the model and the decay of novelty plays the role of the falling error term. The inverted-U over instantaneous novelty is therefore a **first-order surrogate** for learning progress, obtained without a learned world model — cheap enough to run on-device from day one with no training. Section 4.7 measures what the surrogate inherits from LP and what it does not. Rooh's contribution is not the principle but this model-free instantiation on the open multilingual web, its parameterization by personality, and its coupling to a human principal.
 
 **4.4 The six drives and what each does.** Every page moves all six.
 
@@ -82,9 +84,9 @@ The remaining traits are not modeled and should not be claimed.
 
 *Mood* is a **consequence** of the drives, not a cause. In an earlier version mood was cosmetic — picked at random, printed in the journal, changing nothing. That was removed. This is the line between a scheduled program and an entity with will.
 
-**4.5 Five fields that make it a person.** These belong to Rooh and do not change with journeys: `obsessions` (seeds of every journey, never decay), `aversions` (never approached, never become questions), `aspiration` (a big unanswerable question, present in a third of journeys), `openness`, `persistence`, and `bias_service` (the fraction of free wandering dedicated to the principal's gaps). The closed loop: its drives serve the principal, but service never displaces its own fatigue, confusion, or open questions — those are its needs; the rest is its service. A test guards exactly this boundary.
+**4.5 Five fields that make it a person.** These belong to Rooh and do not change with journeys: `obsessions` (seeds of every journey, never decay), `aversions` (never approached, never become questions), `aspiration` (a big unanswerable question, present in a third of journeys), `openness`, `persistence`, and `service_bias` (the fraction of free wandering dedicated to the principal's gaps). The closed loop: its drives serve the principal, but service never displaces its own fatigue, confusion, or open questions — those are its needs; the rest is its service. A test guards exactly this boundary.
 
-**4.6 Emergent behavior — the one measured result.** Five consecutive journeys on limited content, with no one telling it to change:
+**4.6 Course change without instruction — a mechanism sanity check.** Five consecutive journeys, with no one telling it to change. **The mock network must be stated plainly: four languages × five pages, with the text identical within each language.** Content therefore exhausts quickly by construction, which makes the boredom rise close to tautological. This result shows only that the mechanism *responds* — that saturation propagates into the drives and changes the chosen destination. It is not evidence of emergence, and Section 8 exists because it cannot be.
 
 ```
 J1 │ clear     │ wanted: wander          │ boredom 0.38  satisfaction 0.18
@@ -94,7 +96,36 @@ J4 │ restless  │ wanted: strange         │ boredom 1.00  satisfaction 0.37
 J5 │ restless  │ wanted: strange         │ boredom 0.92  satisfaction 0.27
 ```
 
-This is a mock-network result and is the *shape* of what the real-internet experiment (Section 8) must show at scale.
+Read as a sanity check, this is the *shape* the real-internet experiment (Section 8) must reproduce where content does not saturate by construction.
+
+**4.7 What the surrogate inherits from learning progress, and what it does not.** Two properties decide whether an inverted-U over instantaneous novelty is an acceptable stand-in for LP. Both were measured directly.
+
+*Property 1 — novelty decays with exposure (inherited).* Ten successive readings on one topic, eight keywords each drawn from a fixed topical vocabulary, against a fresh body:
+
+```
+reading │ novelty │ learning │ boredom
+      1 │    1.00 │     0.00 │    0.10
+      2 │    0.25 │     0.38 │    0.07
+      3 │    0.38 │     0.68 │    0.00
+      4 │    0.00 │     0.00 │    0.16
+      6 │    0.00 │     0.00 │    0.48
+     10 │    0.00 │     0.00 │    1.00
+```
+
+Novelty falls monotonically as the interest map absorbs the topic's vocabulary, and boredom rises to saturation. This is the mechanism that makes the surrogate work: the memory plays the role of the model, and novelty decay plays the role of the falling error term. Note the decay is *fast* — three readings to saturation — far steeper than a trained predictor's error curve. Whether that steepness is harmful is an open question for Section 8.
+
+*Property 2 — immunity to the noisy TV (inherited, after a fix).* A novelty-rewarded agent stares at static forever because static is always new. Feeding Rooh pages of pure noise (novelty fixed at 1.00) must therefore return zero:
+
+| openness | reward from 20 noise pages, before fix | after fix |
+|---|---|---|
+| 0.1 – 0.6 | 0.00 | 0.00 |
+| 0.78 | 1.27 | 0.00 |
+| 0.9 | 3.96 | 0.00 |
+| 1.0 | 6.00 | 0.00 |
+
+**The vulnerability was found by writing this section, not before it.** The learning function is a triangle with peak `0.30 + 0.35·openness` and half-width `0.30 + 0.20·openness`. Above openness ≈ 0.78 the triangle's base extends past novelty 1.0, so pure noise retained a positive reward: at openness 0.9 the most curious personality earned 0.198 from every page of static — precisely the failure that separates learning progress from raw novelty, appearing exactly in the personality that most needs the protection. The fix constrains the half-width to `min(0.30 + 0.20·openness, 1.0 − peak)`: a page from which nothing connects to anything known teaches nothing, by definition, however open the reader. The constraint binds only the right edge; peaks still move with openness, from novelty 0.33 (openness 0.1) to 0.65 (openness 1.0). Two regression tests guard it.
+
+*Not inherited.* The surrogate cannot detect improvement inside a region whose novelty is stationary. A true LP agent tracks error over time and notices it is getting better at something even when the input's surface novelty does not change; Rooh has no such signal. Where LP measures *progress*, Rooh measures *position* on a curve and infers progress from the fact that position drifts as memory grows. This is the sharpest limitation of the design and should be stated first in any review.
 
 ---
 
@@ -103,23 +134,23 @@ This is a mock-network result and is the *shape* of what the real-internet exper
 **5.1 Three parts, one of which leaves the device.**
 - **Body** — one SQLite file under `~/.rooh/` with eight tables: `meta`, `journeys`, `pages`, `memories`, `interests`, `questions`, `journal`, `lexicon`. Never leaves the device.
 - **Soul** — the wanderer. Goes out, reads in the native language of the sites it visits (not through translation), returns, and deposits everything in the body. Keeps nothing.
-- **Character** — `personality.json`: name, temperament, writing style, obsessions, aversions, aspiration, openness, persistence, bias_service, and time allocation across languages.
+- **Character** — `personality.json`: name, temperament, writing style, obsessions, aversions, aspiration, openness, persistence, service_bias, and time allocation across languages.
 
 **5.2 The daily cycle.** Wake with a mood derived from drives → decide a language according to current wants → translate curiosity into that language → read (web and papers) → return and deposit → measure what was learned, which updates the drives → open questions about what it passed and did not understand → sleep and write the journal.
 
-**5.3 Multilingual reading as infrastructure.** 82 languages in 9 regions (East Asia, Southeast Asia, South Asia, Middle East, Central Asia, Western Europe, the North, Eastern Europe, Africa). Each script is processed as its script requires: character bigrams for Chinese/Japanese/Korean (excluding grammatical hiragana); trigrams for Thai/Khmer/Lao/Burmese; whole words with combining marks retained for Hindi/Bengali/Tamil/Amharic/Georgian; word-level with per-language stoplists for Arabic/Hebrew/Persian/Urdu. The "is this page worth remembering" threshold is derived from script density (0.28 for CJK, 0.50 for Thai-group, 1.00 for the rest) rather than a fixed 400 characters. Languages are a *means*: the purpose is that Rooh can go to any country and take information from its source, not be confined to one language's window. They are not the subject of this research.
+**5.3 Multilingual reading as infrastructure.** 82 languages in 9 regions (East Asia, Southeast Asia, South Asia, Middle East, Central Asia, Western Europe, the North, Eastern Europe, Africa). Each script is processed as its script requires: character bigrams for Chinese/Japanese/Korean (excluding grammatical hiragana); trigrams for Thai/Khmer/Lao/Burmese/Tibetan; whole words with combining marks retained for Hindi/Bengali/Tamil/Amharic/Georgian; word-level with per-language stoplists for Arabic/Hebrew/Persian/Urdu. The "is this page worth remembering" threshold is derived from script density (0.28 for CJK, 0.50 for Thai-group, 1.00 for the rest) rather than a fixed 400 characters. Languages are a *means*: the purpose is that Rooh can go to any country and take information from its source, not be confined to one language's window. They are not the subject of this research.
 
 **5.4 The lexicon.** One concept under the names its peoples give it, built from Wikipedia interlanguage links — editor-ratified equivalents rather than machine translation, hence precise for terms and proper names. Without it, comparing "الذكاء الاصطناعي" with "人工知能" compares two strings, not two worlds.
 
 **5.5 Open questions — what connects one journey to the next.** A term encountered but not understood is recorded as a question. Tomorrow it goes out to chase it. A question closes only when a page *centered on* that term is read — mere occurrence is not an answer, and accepting it would let Rooh close questions without learning, which is self-deception written into code. Questions chased too long without answer are dropped: blind insistence is not persistence.
 
-**5.6 Honesty built into computation.** "No coverage in Korean" is a fact about the world only if Rooh has actually visited Korean sources. Otherwise it is a fact about Rooh. The two are separated in the calculation itself, not only in the display: *visited often and found nothing* is a real gap; *not visited enough* is a deficit in Rooh and is labeled as such. A concept with no equivalent in a language is reported explicitly and not counted as a coverage gap. This distinction is absent from all the Wikipedia-gap literature in Section 6.2 because those systems operate on complete corpora; for a live agent building its picture incrementally, it is the central problem.
+**5.6 Honesty built into computation.** "No coverage in Korean" is a fact about the world only if Rooh has actually visited Korean sources. Otherwise it is a fact about Rooh. The two are separated in the calculation itself, not only in the display: *visited often and found nothing* is a real gap; *not visited enough* is a deficit in Rooh and is labeled as such. A concept with no equivalent in a language is reported explicitly and not counted as a coverage gap. The Wikipedia-gap systems in Section 6.2 do not face this distinction, because they operate on complete static corpora where coverage is given. For a live agent assembling its picture incrementally, it is the central problem, and no prior work reviewed here addresses it.
 
 **5.7 Research sources.** Four open databases, no keys: OpenAlex (~250M works; the only one filtering by language of the paper itself), Crossref (~150M DOIs), arXiv, DOAJ (open-access journals in Spanish, Portuguese, Indonesian, Persian). Paper metadata is stored for display but only title and abstract are digested; an earlier version digested metadata and "researchers" and "year" became top interests. Fixed and regression-tested.
 
 **5.8 Manners.** Honest User-Agent, `robots.txt` respected, no host hit faster than once per two seconds, no paywalls bypassed, no logins, no personal data collected. Owner-configurable `hosts_blocked` and `terms_blocked`.
 
-**5.9 Modules and size.** body 519 lines, wanderer 564, drives 175, insight 245, mind 211, lang 257, languages 154, research 256, sources 267, personality 172, senses 156, net 150, cli 671 (19 commands); tests 1,132 lines, 92 tests, all offline. Standard library only; `anthropic` (summarizing into Arabic regardless of source language, journal in character voice, cross-world comparison prose) and `beautifulsoup4` are optional.
+**5.9 Modules and size.** body 519 lines, wanderer 564, drives 180, insight 245, mind 211, lang 257, languages 154, research 256, sources 267, personality 172, senses 156, net 150, cli 671 (19 commands); tests 1,153 lines, 94 tests, all offline. Standard library only; `anthropic` (summarizing into Arabic regardless of source language, journal in character voice, cross-world comparison prose) and `beautifulsoup4` are optional.
 
 **5.10 Measured footprint.** Peak memory 28 MB (Python itself 25), 5 ms CPU per page, 42 KB storage per page. At 200 pages/day: 3.1 GB/year, 31 GB/decade. The program runs on any ten-year-old machine; almost all wall time is network wait. The only real hardware question is where the *mind* (the language model) sits: via API on any modern laptop, or locally (16 GB unified memory for a 7–8B model, 32 GB for ~30B, 64 GB for ~70B). `rooh live` implies a 24-hour service, so the correct deployment separates a small always-on device holding the body from the laptop used to query it over the local network.
 
@@ -145,7 +176,9 @@ Each subsection ends with the difference from Rooh. A reviewer will look for exa
 
 **Recent LLM-era work (2025–2026).** Curiosity-driven exploration is being ported to LLM agents: e.g., WorldLLM (curiosity-driven theory-making for world models, 2025) and self-evolving agent frameworks such as APEX (2026). *[verify exact titles and venues before submission.]*
 
-**Difference from Rooh.** (a) *Domain*: all of the above operate in sensorimotor or game/simulation spaces; Rooh's exploration space is the open multilingual web, where a "region" is a language-topic pair. (b) *Personality-parameterized curve*: in IAC the interestingness curve is fixed; in Rooh, `openness` shifts its peak — no prior work parameterizes learning progress by a personality trait. (c) *Service bias*: prior agents serve only themselves; Rooh's `bias_service` redirects a fraction of curiosity toward one human's blind spots. (d) *Persistence over years, not sessions*: the body accumulates across a lifetime.
+**Difference from Rooh.** Stated first, the difference that is a *weakness*: every system above computes learning progress proper — an error signal differentiated over time against a learned model. Rooh does not (Section 4.3); it uses a model-free surrogate and inherits only part of LP's behavior (Section 4.7). Any comparison must begin there.
+
+The differences that are contributions: (a) *Domain* — all of the above operate in sensorimotor or game/simulation spaces; Rooh's exploration space is the open multilingual web, where a "region" is a language-topic pair. (b) *Model-free instantiation* — IAC and ICM/RND require a learned predictor; Rooh's surrogate needs none, which is what allows it to run on one person's machine, from the first minute, with no training phase and no vendor. (c) *Personality-parameterized curve* — in IAC the interestingness curve is fixed; in Rooh, `openness` moves its peak, and Section 4.7 shows this parameterization is where the noisy-TV protection can silently fail. No prior work reviewed parameterizes an intrinsic-motivation curve by a personality trait. (d) *Service bias* — prior agents serve only themselves; Rooh's `service_bias` redirects a fraction of curiosity toward one human's blind spots. (e) *Persistence over years, not sessions* — the body accumulates across a lifetime.
 
 ### 6.2 Cross-lingual knowledge gaps in Wikipedia
 
@@ -199,17 +232,21 @@ No prior work combines: (1) learning-progress drives, (2) on the open multilingu
 
 | Statement | Status |
 |---|---|
-| Drives are computed from learning rate, not novelty; mood is derived from drives | **[CLAIM]** — in code, tested |
+| Drives are computed from position on an inverted-U over novelty, not from novelty level; mood is derived from drives | **[CLAIM]** — in code, tested |
+| Novelty decays monotonically with exposure, which is what makes the surrogate track learning | **[CLAIM]** — measured (§4.7) |
+| Pure noise yields exactly zero reward at every openness value (noisy-TV immunity) | **[CLAIM]** — measured, regression-tested (§4.7) |
 | Openness shifts the learning-curve peak; persistence sets question horizon | **[CLAIM]** — in code, measured |
 | Questions open on unknown terms and close only on centered pages | **[CLAIM]** — in code, tested |
 | Real gap vs. insufficient visiting are separated in computation | **[CLAIM]** — in code, tested |
 | 82 languages handled per script; density-derived thresholds | **[CLAIM]** — in code, tested |
-| Emergent course change without instruction | **[CLAIM, weak]** — measured on mock network only (5 journeys) |
+| Course change without instruction | **[CLAIM, weak]** — mock network only, and the mock saturates by construction (§4.6); a sanity check, not evidence of emergence |
 | Emergent, coherent behavior on the real web over weeks | **[TO BE TESTED]** — Section 8 |
 | Learns every day, analyzes world events, brings back what the principal needs | **[INTENT]** — requires real run + LM |
 | Proposes ideas, builds, publishes, earns money and recognition | **[INTENT]** — roadmap phases 2–5 |
 | Is very intelligent / knows everything | **Not a claim.** Rewritten as: never stops learning and reports what it does not know |
 | Cannot be replicated | **Not a claim.** Rewritten as: mechanism reproducible, accumulated body not copyable |
+| Rooh computes learning progress | **Not a claim.** It computes a model-free surrogate; the difference and its cost are stated in §4.3, §4.7, §6.1 |
+| The surrogate detects improvement in a region of stationary novelty | **Not a claim.** It cannot; this is the design's sharpest limitation |
 
 ---
 
@@ -240,6 +277,9 @@ No prior work combines: (1) learning-progress drives, (2) on the open multilingu
 ## 9. Limitations and ethics
 
 - Not yet run on the real internet; all numbers are from code or mock network.
+- The drives are a model-free surrogate for learning progress, not learning progress. Rooh cannot notice it is improving inside a region whose surface novelty is stationary (§4.7).
+- Novelty decays to zero within about three readings of a topic — far steeper than a trained predictor's error curve. Whether this makes Rooh abandon topics prematurely is unknown until the real run.
+- The noisy-TV protection was found to fail above openness ≈ 0.78 and was fixed (§4.7). That it existed at all is evidence that a parameterized motivation curve needs its edge cases tested, not reasoned about.
 - Without a language model, "understanding" is n-gram/keyword level plus the lexicon; the model supplies comprehension and is not this work's contribution.
 - The first week yields no gaps; the command says so rather than returning empty.
 - Cross-world comparison prose requires a model; without it only tables are shown.
@@ -270,9 +310,9 @@ Bank accounts are in the principal's name; every financial action Rooh takes is 
 
 ## 11. Immediate next steps
 
-1. Run on the real internet. Run `rooh sources --check` first.
-2. Implement `rooh snapshot`; run three instances for 6–8 weeks.
-3. Verify every reference marked *[verify]*; read Oudeyer & Kaplan (2007, typology) and Colas et al. (2022) in full.
+1. **Implement `rooh snapshot` and the two baselines** (random walker, novelty-only walker). Nothing else can start until the instrument exists: six weeks of running without daily snapshots produces a database, not a result. The novelty-only baseline is a one-line change to the learning function and is what makes the noisy-TV argument in §4.7 an experimental finding rather than an analytic one.
+2. Run `rooh sources --check`, then start all three instances on the real internet. Week 1 is warm-up by design.
+3. Verify every reference marked *[verify]*; read Oudeyer & Kaplan (2007, typology) and Colas et al. (2022) in full. The positioning in §6.1 depends on those two being read, not cited.
 4. Write paper 1 around the numbers that come out — not before.
 
 ---
