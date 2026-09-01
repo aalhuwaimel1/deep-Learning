@@ -534,6 +534,27 @@ class TestDrives(unittest.TestCase):
         self.assertGreater(Drives.learning(familiar, openness=0.1),
                            Drives.learning(familiar, openness=0.9))
 
+    def test_pure_noise_never_rewards_however_open(self) -> None:
+        """«التلفاز المشوّش»: صفحةٌ لا يتّصل منها شيءٌ بما يعرف لا تُعلّمه شيئاً.
+
+        انحدار: قاعدة المنحنى كانت تتجاوز الجِدّة ١٫٠ عند الانفتاح العالي،
+        فكان المنفتح (٠٫٩) يأخذ ٠٫٢٠ من كل صفحة ضوضاء محضة — أي إن أهمّ ما
+        يميّز معدّل التعلّم عن الجِدّة الصرفة كان ينهار عند أكثر الشخصيات
+        فضولاً، وهي أحوجها إلى تلك الحماية.
+        """
+        for op in (0.0, 0.1, 0.5, 0.6, 0.9, 1.0):
+            self.assertEqual(Drives.learning(1.0, op), 0.0, f"انفتاح {op}")
+            self.assertEqual(Drives.learning(0.0, op), 0.0, f"انفتاح {op}")
+
+    def test_openness_still_moves_the_peak_after_the_fix(self) -> None:
+        """القيد يحرس الطرف ولا يلغي أثر الانفتاح."""
+        peaks = []
+        for op in (0.1, 0.5, 0.9):
+            best = max(range(101), key=lambda i: Drives.learning(i / 100, op)) / 100
+            peaks.append(best)
+        self.assertEqual(peaks, sorted(peaks))
+        self.assertLess(peaks[0], peaks[-1])
+
     def test_novelty_measure(self) -> None:
         known = {"a", "b"}
         self.assertEqual(Drives.novelty(["a", "b"], known), 0.0)
