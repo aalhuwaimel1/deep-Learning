@@ -30,7 +30,9 @@ CREATE TABLE IF NOT EXISTS journeys (
     langs       TEXT,          -- اللغات التي زارتها (JSON)
     visited     INTEGER DEFAULT 0,
     stored      INTEGER DEFAULT 0,
-    failed      INTEGER DEFAULT 0
+    failed      INTEGER DEFAULT 0,
+    gain        REAL DEFAULT 0.0,   -- مجموع ما تعلّمه في الرحلة
+    mode        TEXT DEFAULT 'كامل'
 );
 
 -- الصفحات الخام كما رأتها الروح
@@ -81,6 +83,17 @@ CREATE TABLE IF NOT EXISTS interests (
     PRIMARY KEY (term, lang)
 );
 CREATE INDEX IF NOT EXISTS idx_interests_weight ON interests(weight DESC);
+
+-- المعجم: المفهوم الواحد بأسماء أهله. يُنشأ هنا لا كسولاً عند أوّل
+-- ترجمة: أي قراءةٍ للجسد قبل أوّل ترجمة كانت تنهار على جدولٍ غير موجود.
+CREATE TABLE IF NOT EXISTS lexicon (
+    term     TEXT NOT NULL,
+    src_lang TEXT NOT NULL,
+    dst_lang TEXT NOT NULL,
+    dst_term TEXT,
+    learned_at REAL NOT NULL,
+    PRIMARY KEY (term, src_lang, dst_lang)
+);
 
 -- أسئلة فتحها ولم يغلقها: مصطلحٌ مرّ به ولم يعرفه.
 -- هذا ما يصل رحلةً برحلة: يعود غداً ليكمل ما بدأه أمس.
@@ -140,6 +153,7 @@ class Body:
     # ── تهيئة ────────────────────────────────────────────────────────────
     def _migrate(self) -> None:
         self.conn.executescript(_SCHEMA)
+        self._add_missing_columns()
         self._ensure_fts()
         cur = self.conn.execute("SELECT value FROM meta WHERE key='schema_version'")
         row = cur.fetchone()
@@ -152,6 +166,15 @@ class Body:
                 "INSERT OR REPLACE INTO meta(key, value) VALUES('born_at', ?)",
                 (str(time.time()),),
             )
+        self.conn.commit()
+
+    def _add_missing_columns(self) -> None:
+        """أعمدةٌ أُضيفت بعد أن وُلدت أجسادٌ في الميدان. لا تُعاد تهيئتها."""
+        have = {r[1] for r in self.conn.execute("PRAGMA table_info(journeys)")}
+        for col, ddl in (("gain", "REAL DEFAULT 0.0"),
+                         ("mode", "TEXT DEFAULT 'كامل'")):
+            if col not in have:
+                self.conn.execute(f"ALTER TABLE journeys ADD COLUMN {col} {ddl}")
         self.conn.commit()
 
     def _ensure_fts(self) -> None:
@@ -192,12 +215,15 @@ class Body:
         return int(cur.lastrowid)
 
     def end_journey(
-        self, journey_id: int, *, langs: list[str], visited: int, stored: int, failed: int
+        self, journey_id: int, *, langs: list[str], visited: int, stored: int,
+        failed: int, gain: float = 0.0, mode: str = "كامل"
     ) -> None:
         self.conn.execute(
-            """UPDATE journeys SET ended_at=?, langs=?, visited=?, stored=?, failed=?
+            """UPDATE journeys SET ended_at=?, langs=?, visited=?, stored=?,
+                                   failed=?, gain=?, mode=?
                WHERE id=?""",
-            (time.time(), json.dumps(langs, ensure_ascii=False), visited, stored, failed, journey_id),
+            (time.time(), json.dumps(langs, ensure_ascii=False), visited, stored,
+             failed, round(gain, 4), mode, journey_id),
         )
         self.conn.commit()
 
@@ -485,6 +511,83 @@ class Body:
             "SELECT term FROM interests ORDER BY weight DESC LIMIT ?", (limit,)
         ).fetchall()
         return {r["term"].lower() for r in rows}
+
+    # ── وسم عام ──────────────────────────────────────────────────────────
+    def get_meta(self, key: str, default: Optional[str] = None) -> Optional[str]:
+        row = self.conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+        return row[0] if row else default
+
+    def set_meta(self, key: str, value: str) -> None:
+        self.conn.execute(
+            "INSERT OR REPLACE INTO meta(key, value) VALUES(?,?)", (key, value))
+        self.conn.commit()
+
+    # ── لقطة يومية للقياس ────────────────────────────────────────────────
+    def snapshot(self, since: float = 0.0) -> dict[str, Any]:
+        """كل ما تحتاجه سلسلةٌ زمنية للتحليل، في سطرٍ واحد.
+
+        نجمع التراكمي والفارق منذ اللقطة السابقة معاً: التراكمي يصف
+        الحالة، والفارق وحده هو الذي يُحلَّل زمنياً. لقطةٌ بلا فوارق
+        تعطي منحنياتٍ صاعدة أبداً لا يُقرأ منها شيء.
+        """
+        one = lambda q, a=(): self.conn.execute(q, a).fetchone()[0]  # noqa: E731
+
+        def by_lang(where: str, args: tuple) -> dict[str, int]:
+            rows = self.conn.execute(
+                f"SELECT lang, COUNT(*) c FROM memories WHERE {where} GROUP BY lang",
+                args).fetchall()
+            return {r["lang"]: r["c"] for r in rows}
+
+        # أوّل لسانٍ قصده في كل رحلةٍ منذ اللقطة السابقة — به يُقاس
+        # «الاستئناف»: هل حالةُ أمسِ تتنبّأ بوجهة اليوم؟
+        first_langs = [r["lang"] for r in self.conn.execute(
+            """SELECT p.lang FROM pages p
+               JOIN (SELECT journey_id, MIN(fetched_at) f FROM pages
+                     WHERE fetched_at > ? GROUP BY journey_id) m
+                 ON p.journey_id = m.journey_id AND p.fetched_at = m.f
+               ORDER BY p.fetched_at""", (since,)).fetchall()]
+
+        return {
+            "cumulative": {
+                "journeys": one("SELECT COUNT(*) FROM journeys"),
+                "pages": one("SELECT COUNT(*) FROM pages"),
+                "memories": one("SELECT COUNT(*) FROM memories"),
+                "papers": one("SELECT COUNT(*) FROM memories WHERE kind='paper'"),
+                "interests": one("SELECT COUNT(*) FROM interests"),
+                "lexicon": one("SELECT COUNT(*) FROM lexicon WHERE dst_term IS NOT NULL"),
+                "questions_open": one(
+                    "SELECT COUNT(*) FROM questions WHERE status='open'"),
+                "questions_answered": one(
+                    "SELECT COUNT(*) FROM questions WHERE status='answered'"),
+                "questions_abandoned": one(
+                    "SELECT COUNT(*) FROM questions WHERE status='abandoned'"),
+                # مجموع ما تعلّمه فعلاً — الكمّ الذي يفصل الأطروحة عن
+                # خطّها المرجعي. بدونه تُقاس الحركة ولا يُقاس التعلّم.
+                "learning_gain": round(
+                    one("SELECT COALESCE(SUM(gain),0) FROM journeys"), 4),
+            },
+            "delta": {
+                "journeys": one(
+                    "SELECT COUNT(*) FROM journeys WHERE started_at > ?", (since,)),
+                "pages": one(
+                    "SELECT COUNT(*) FROM pages WHERE fetched_at > ?", (since,)),
+                "memories": one(
+                    "SELECT COUNT(*) FROM memories WHERE created_at > ?", (since,)),
+                "questions_opened": one(
+                    "SELECT COUNT(*) FROM questions WHERE asked_at > ?", (since,)),
+                "questions_answered": one(
+                    "SELECT COUNT(*) FROM questions WHERE answered_at > ?", (since,)),
+                "learning_gain": round(one(
+                    "SELECT COALESCE(SUM(gain),0) FROM journeys WHERE started_at > ?",
+                    (since,)), 4),
+            },
+            "languages": by_lang("1=1", ()),
+            "languages_delta": by_lang("created_at > ?", (since,)),
+            "first_langs": first_langs,
+            "top_interests": [
+                [t, lg, round(w, 4)] for t, lg, w in self.top_interests(limit=10)],
+            "journal": (self.read_journal(1) or [(0, "")])[0][1],
+        }
 
     # ── حالة الجسد ───────────────────────────────────────────────────────
     def stats(self) -> dict[str, Any]:

@@ -10,7 +10,7 @@ from typing import Optional
 
 from . import config, insight, languages, research, sources
 from .body import Body
-from .drives import Drives
+from .drives import MODES, Drives
 from .mind import LLM, Mind, describe_backend
 from .net import FetchError, Fetcher
 from .personality import DEFAULT_PERSONALITY, Personality
@@ -77,6 +77,7 @@ def cmd_wander(args: argparse.Namespace) -> int:
     p = Personality.load()
     mind = Mind(p, use_llm=not args.no_llm)
     quiet = args.quiet
+    mode = args.mode
 
     def on_event(kind: str, data: dict) -> None:
         if quiet:
@@ -107,7 +108,10 @@ def cmd_wander(args: argparse.Namespace) -> int:
             print(f"⟵ عاد ومعه {data['stored']} من {data['visited']}")
 
     with Body() as body:
-        w = Wanderer(body, p, mind, on_event=on_event)
+        if mode:
+            body.set_meta("mode", mode)
+        w = Wanderer(body, p, mind, on_event=on_event,
+                     mode=mode or body.get_meta("mode", "كامل"))
         try:
             rep = w.journey(pages=args.pages, only_lang=args.lang)
         except KeyboardInterrupt:
@@ -484,6 +488,89 @@ def cmd_brief(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_snapshot(args: argparse.Namespace) -> int:
+    """لقطة يومية للقياس — سطر JSON واحد يُلحق بـ snapshots.jsonl.
+
+    هذا هو ما يُحلَّل في التجربة، لا قاعدة البيانات نفسها: ستة أسابيع
+    تشغيلٍ بلا لقطاتٍ يومية تنتج قاعدة بيانات، لا نتيجة.
+    """
+    p = Personality.load()
+    path = config.snapshots_path()
+
+    if args.show:
+        if not path.exists():
+            print("لا لقطات بعد.")
+            return 1
+        lines = path.read_text(encoding="utf-8").strip().splitlines()[-args.show:]
+        print(f"{'التاريخ':<12} {'وضع':<8} {'رحلات':>6} {'صفحات':>7} {'ذكريات':>7} "
+              f"{'أسئلة':>7} {'ملل':>5} {'حيرة':>5} {'لغات':>5}")
+        print("─" * 74)
+        for ln in lines:
+            try:
+                d = json.loads(ln)
+            except json.JSONDecodeError:
+                continue
+            dl, cu, dr = d["delta"], d["cumulative"], d["drives"]
+            print(f"{d['date']:<12} {d.get('mode','?'):<8} {dl['journeys']:>6} "
+                  f"{dl['pages']:>7} {dl['memories']:>7} "
+                  f"{cu['questions_open']:>7} {dr['boredom']:>5.2f} "
+                  f"{dr['confusion']:>5.2f} {len(d['languages_delta']):>5}")
+        return 0
+
+    with Body() as b:
+        since = float(b.get_meta("last_snapshot", "0") or 0)
+        snap = b.snapshot(since)
+        drives = Drives.loads(b.load_drives())
+        open_q = b.count_open_questions()
+        snap.update({
+            "date": time.strftime("%Y-%m-%d", time.localtime()),
+            "ts": round(time.time(), 3),
+            "since": round(since, 3),
+            "label": args.label or b.get_meta("label", "rooh"),
+            "mode": b.get_meta("mode", "كامل"),
+            "drives": {k: round(v, 4) for k, v in vars(drives).items()},
+            "mood": drives.mood(),
+            "urge": drives.urge(open_q > 0),
+        })
+        try:
+            from . import insight
+
+            langs = sorted(p.languages, key=p.languages.get, reverse=True)[:12]
+            snap["gaps"] = len(insight.gaps(b, langs, limit=20))
+        except Exception:          # الفجوات مؤشّرٌ مساعد، لا تُسقط اللقطة
+            snap["gaps"] = None
+        if args.label:
+            b.set_meta("label", args.label)
+        if not args.keep:
+            b.set_meta("last_snapshot", str(snap["ts"]))
+
+    line = json.dumps(snap, ensure_ascii=False, sort_keys=True)
+    if not args.dry_run:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as f:
+            f.write(line + "\n")
+
+    if args.json:
+        print(line)
+        return 0
+
+    dl, cu = snap["delta"], snap["cumulative"]
+    print(f"لقطة {snap['date']} • {snap['label']} • وضع «{snap['mode']}»")
+    print(f"  منذ اللقطة السابقة: {dl['journeys']} رحلة • {dl['pages']} صفحة • "
+          f"{dl['memories']} ذكرى • فتح {dl['questions_opened']} سؤالاً "
+          f"وأغلق {dl['questions_answered']}")
+    print(f"  التراكمي: {cu['memories']} ذكرى • {cu['lexicon']} مفهوماً في معجمه • "
+          f"{cu['questions_open']} سؤالاً مفتوحاً")
+    if snap["languages_delta"]:
+        top = sorted(snap["languages_delta"].items(), key=lambda kv: -kv[1])[:6]
+        print("  لغات اليوم: " + "، ".join(
+            f"{languages.arabic_name(k)} {v}" for k, v in top))
+    print(f"  حاله: {snap['mood']} — يريد أن {snap['urge']}")
+    if not args.dry_run:
+        print(f"\n  ← {path}")
+    return 0
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     with Body() as b:
         st = b.stats()
@@ -566,6 +653,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--lang", default=None, help="يقصر تجوّله على لغة واحدة (zh, ja, ru…)")
     p.add_argument("--no-llm", action="store_true", help="عقل محلي فقط")
     p.add_argument("-q", "--quiet", action="store_true")
+    p.add_argument("--mode", choices=list(MODES), default=None,
+                   help="وضع التجربة: كامل (رُوح) أو خطّ مرجعي")
     p.set_defaults(fn=cmd_wander)
 
     p = sub.add_parser("live", help="يظلّ يخرج ويعود على فترات")
@@ -575,6 +664,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--lang", default=None)
     p.add_argument("--no-llm", action="store_true")
     p.add_argument("-q", "--quiet", action="store_true")
+    p.add_argument("--mode", choices=list(MODES), default=None)
     p.set_defaults(fn=cmd_live)
 
     p = sub.add_parser("recall", help="تسأله عمّا يذكر")
@@ -646,6 +736,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--keep", action="store_true",
                    help="لا يحرّك العلامة، فتراها ثانيةً في المرّة القادمة")
     p.set_defaults(fn=cmd_brief)
+
+    p = sub.add_parser("snapshot", help="لقطة يومية للقياس (JSONL)")
+    p.add_argument("--json", action="store_true", help="سطر JSON فقط")
+    p.add_argument("--show", type=int, metavar="N", help="يعرض آخر N لقطة")
+    p.add_argument("--label", default=None, help="اسم هذه النسخة في التجربة")
+    p.add_argument("--keep", action="store_true", help="لا يحرّك علامة الفارق")
+    p.add_argument("--dry-run", action="store_true", help="بلا كتابة في السجلّ")
+    p.set_defaults(fn=cmd_snapshot)
 
     p = sub.add_parser("status", help="حالة الجسد")
     p.set_defaults(fn=cmd_status)

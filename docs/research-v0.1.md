@@ -11,7 +11,7 @@ Status: Working draft, revised after a line-by-line audit of every **[CLAIM]** a
 
 This is the first written record of an idea that will be developed for at least five years. It is deliberately written as a research document, not a product brochure, because the discipline of separating *what is built*, *what is measured*, and *what is intended* is the only thing that lets the idea grow without collapsing into vague claims.
 
-The system it describes exists as version 0.1 (about 4,000 lines of Python, standard library only, 94 offline tests). It has **not yet been run on the real internet**. Every number in this document comes from code or from runs against a local mock network. The first real-internet run is the first real experiment.
+The system it describes exists as version 0.1 (about 4,000 lines of Python, standard library only, 103 offline tests). It has **not yet been run on the real internet**. Every number in this document comes from code or from runs against a local mock network. The first real-internet run is the first real experiment.
 
 ---
 
@@ -150,7 +150,7 @@ Novelty falls monotonically as the interest map absorbs the topic's vocabulary, 
 
 **5.8 Manners.** Honest User-Agent, `robots.txt` respected, no host hit faster than once per two seconds, no paywalls bypassed, no logins, no personal data collected. Owner-configurable `hosts_blocked` and `terms_blocked`.
 
-**5.9 Modules and size.** body 519 lines, wanderer 564, drives 180, insight 245, mind 211, lang 257, languages 154, research 256, sources 267, personality 172, senses 156, net 150, cli 671 (19 commands); tests 1,153 lines, 94 tests, all offline. Standard library only; `anthropic` (summarizing into Arabic regardless of source language, journal in character voice, cross-world comparison prose) and `beautifulsoup4` are optional.
+**5.9 Modules and size.** body 519 lines, wanderer 564, drives 180, insight 245, mind 211, lang 257, languages 154, research 256, sources 267, personality 172, senses 156, net 150, cli 769 (20 commands); tests 1,255 lines, 103 tests, all offline. Standard library only; `anthropic` (summarizing into Arabic regardless of source language, journal in character voice, cross-world comparison prose) and `beautifulsoup4` are optional.
 
 **5.10 Measured footprint.** Peak memory 28 MB (Python itself 25), 5 ms CPU per page, 42 KB storage per page. At 200 pages/day: 3.1 GB/year, 31 GB/decade. The program runs on any ten-year-old machine; almost all wall time is network wait. The only real hardware question is where the *mind* (the language model) sits: via API on any modern laptop, or locally (16 GB unified memory for a 7–8B model, 32 GB for ~30B, 64 GB for ~70B). `rooh live` implies a 24-hour service, so the correct deployment separates a small always-on device holding the body from the laptop used to query it over the local network.
 
@@ -254,14 +254,38 @@ No prior work combines: (1) learning-progress drives, (2) on the open multilingu
 
 **Research question.** Does a local agent driven by learning-progress drives, released on the open multilingual web, develop coherent self-directed behavior — shifting interests, questions it opens and closes, destinations no one scheduled — that (a) differs measurably from a random walker and a novelty-only walker, and (b) persists and resumes across days rather than restarting?
 
-**Conditions.** Three instances, identical code, personality, network, and duration:
-1. **Rooh** — full drives.
-2. **Random** — destination chosen uniformly.
-3. **Novelty-only** — reward = novelty, no learning-rate term (the noisy-TV baseline).
+**Conditions.** Three instances, identical code, personality, network, and duration, selected by `rooh wander --mode` and recorded in every snapshot. The two baselines isolate *different* things and must not be conflated:
+1. **`كامل` (full)** — Rooh as designed.
+2. **`جِدّة` (novelty-only)** — isolates the **reward function**: `learning = novelty`, no inverted-U. Destination logic, personality, and service bias are unchanged in code but service is disabled (a baseline that serves the principal is not a baseline). This is the noisy-TV arm.
+3. **`عشوائي` (random)** — isolates **destination selection**: language chosen uniformly rather than by personality weights, doors shuffled, urge pinned to "wander" so drives are *measured but never steer*. Its reward function is Rooh's, so any difference from arm 1 is attributable to choice, not to valuation.
 
 **Duration.** Minimum 6 weeks; 8 preferred. First week is warm-up (the lexicon is empty and `gaps` returns nothing, by design).
 
-**Daily snapshot (new command, `rooh snapshot`).** One JSON line per day per instance: language time distribution, top-10 interests with weights, open and closed question counts, six drive values, pages read, pages remembered, journal entry.
+**Daily snapshot (`rooh snapshot`, implemented).** One JSON line appended to `~/.rooh/snapshots.jsonl` per day per instance — 16 fields, each split into *cumulative* state and *delta since the previous snapshot*. A snapshot without deltas yields monotonically rising curves from which nothing can be read, so both are recorded:
+
+| field | serves which measure |
+|---|---|
+| `languages`, `languages_delta` | stage emergence (change-point detection on the daily distribution) |
+| `top_interests` (term, lang, weight ×10) | interest coherence (day-to-day Jaccard) |
+| `questions_open/answered/abandoned`, deltas | question dynamics |
+| `drives` (six values), `mood`, `urge` | internal state |
+| `first_langs` (first language of each journey since last snapshot) | **resumption** — correlate day-N drives with day-N+1 first destination |
+| `learning_gain` (cumulative and delta) | **the quantity that separates the thesis from its baseline** |
+| `gaps`, `lexicon` size | usefulness side result, and warm-up progress |
+| `journal` | qualitative record |
+
+`learning_gain` was added after a pilot run showed the other fields could not discriminate the arms: movement was being measured, learning was not.
+
+**Pilot (mock network, 4 simulated days, 3 arms).** Reported here as an instrument check, not a result — the mock saturates by construction (§4.6), so it cannot discriminate destination policies. It does discriminate reward functions:
+
+```
+day │ كامل (Rooh) │  جِدّة  │ عشوائي
+  1 │        0.63 │   2.67 │   0.63
+  2 │        0.00 │   1.00 │   0.00
+tot │        0.63 │   3.67 │   0.63
+```
+
+The novelty arm reports ~6× more "learning" from identical content, because it rewards pages that connect to nothing already known. On a mock of twenty pages this is harmless bookkeeping; on the open web it is the noisy-TV trap, and the real run must show it as wasted days. The random arm matches Rooh exactly, as designed — it shares the reward function and differs only in choice, which a saturated mock cannot expose.
 
 **Measures.**
 - *Stage emergence*: change-point detection on the language distribution over days; number and duration of stable regimes. Prediction: Rooh shows regimes; Random shows none; Novelty-only shows drift without regimes.
@@ -310,8 +334,8 @@ Bank accounts are in the principal's name; every financial action Rooh takes is 
 
 ## 11. Immediate next steps
 
-1. **Implement `rooh snapshot` and the two baselines** (random walker, novelty-only walker). Nothing else can start until the instrument exists: six weeks of running without daily snapshots produces a database, not a result. The novelty-only baseline is a one-line change to the learning function and is what makes the noisy-TV argument in §4.7 an experimental finding rather than an analytic one.
-2. Run `rooh sources --check`, then start all three instances on the real internet. Week 1 is warm-up by design.
+1. ~~Implement `rooh snapshot` and the two baselines.~~ **Done.** `rooh snapshot` (16 fields, cumulative + delta) and `--mode كامل|جِدّة|عشوائي`; 103 offline tests. Building it surfaced two defects that would have destroyed the experiment: the `lexicon` table was created lazily on first translation, so the very first snapshot of every fresh instance crashed; and no field measured learning, only movement.
+2. Run `rooh sources --check`, then start all three instances on the real internet, each in its own `ROOH_HOME`, with `rooh snapshot` on a daily cron. Week 1 is warm-up by design.
 3. Verify every reference marked *[verify]*; read Oudeyer & Kaplan (2007, typology) and Colas et al. (2022) in full. The positioning in §6.1 depends on those two being read, not cited.
 4. Write paper 1 around the numbers that come out — not before.
 

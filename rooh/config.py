@@ -30,6 +30,11 @@ def journal_dir() -> Path:
     return home() / "journal"
 
 
+def snapshots_path() -> Path:
+    """سجلّ القياس: سطر JSON واحد لكل يوم. هذا هو ما يُحلَّل، لا قاعدة البيانات."""
+    return home() / "snapshots.jsonl"
+
+
 def ensure_home() -> Path:
     h = home()
     h.mkdir(parents=True, exist_ok=True)

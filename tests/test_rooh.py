@@ -311,6 +311,29 @@ class TestBody(unittest.TestCase):
         self.assertIn("باقٍ", terms)
         self.assertNotIn("زائل", terms)
 
+    def test_snapshot_works_on_a_virgin_body(self) -> None:
+        """انحدار: كان جدول lexicon يُنشأ كسولاً عند أوّل ترجمة، فتنهار
+        أوّل لقطةٍ لأي نسخةٍ جديدة — أي في اليوم الأوّل من التجربة."""
+        snap = self.body.snapshot(0.0)
+        self.assertEqual(snap["cumulative"]["lexicon"], 0)
+        self.assertEqual(snap["cumulative"]["memories"], 0)
+        self.assertEqual(snap["languages"], {})
+        self.assertEqual(snap["first_langs"], [])
+
+    def test_snapshot_separates_cumulative_from_delta(self) -> None:
+        """لقطةٌ بلا فوارق تعطي منحنياتٍ صاعدة أبداً لا يُقرأ منها شيء."""
+        import time as _t
+
+        self.body.remember(title="قديم", summary="s", lang="ja")
+        mark = _t.time()
+        _t.sleep(0.01)
+        self.body.remember(title="جديد", summary="s", lang="zh")
+        snap = self.body.snapshot(mark)
+        self.assertEqual(snap["cumulative"]["memories"], 2)
+        self.assertEqual(snap["delta"]["memories"], 1)
+        self.assertEqual(snap["languages"], {"ja": 1, "zh": 1})
+        self.assertEqual(snap["languages_delta"], {"zh": 1})
+
     def test_stats(self) -> None:
         self.body.remember(title="t", summary="s", lang="ja")
         st = self.body.stats()
@@ -639,6 +662,28 @@ class TestDrives(unittest.TestCase):
             d.answered()
         for name, value in vars(d).items():
             self.assertTrue(0.0 <= value <= 1.0, f"{name}={value}")
+
+
+# ── أوضاع التجربة ────────────────────────────────────────────────────────
+class TestExperimentModes(unittest.TestCase):
+    """الخطّان المرجعيان يعزلان شيئين مختلفين، ولا يجوز خلطهما:
+    «جِدّة» تعزل دالة المكافأة، و«عشوائي» يعزل اختيار الوجهة."""
+
+    def test_novelty_baseline_rewards_raw_novelty(self) -> None:
+        for nov in (0.0, 0.25, 0.5, 0.75, 1.0):
+            self.assertEqual(Drives.learning(nov, 0.6, "جِدّة"), nov)
+
+    def test_the_baseline_is_the_one_that_stares_at_static(self) -> None:
+        """هذا هو الفرق كلّه: الضوضاء المحضة مكافأتها قصوى عند الجِدّة الصرفة."""
+        noise_full = sum(Drives.learning(1.0, 0.6, "كامل") for _ in range(20))
+        noise_base = sum(Drives.learning(1.0, 0.6, "جِدّة") for _ in range(20))
+        self.assertEqual(noise_full, 0.0)
+        self.assertEqual(noise_base, 20.0)
+
+    def test_openness_does_not_touch_the_baseline(self) -> None:
+        """الشخصية معطّلة في الخطّ المرجعي، وإلا لم يكن خطّاً مرجعياً."""
+        for op in (0.0, 0.5, 1.0):
+            self.assertEqual(Drives.learning(0.8, op, "جِدّة"), 0.8)
 
 
 # ── الرغبات ──────────────────────────────────────────────────────────────
@@ -1140,6 +1185,63 @@ class TestJourney(unittest.TestCase):
             rep = w.journey(pages=2)
         self.assertNotIn("فجوة", rep.urges)
         self.assertIn("مألوف", rep.urges)
+
+    def test_random_arm_lets_drives_measure_but_not_steer(self) -> None:
+        with LocalNet() as base:
+            w = self._wanderer(base)
+            w.mode = "عشوائي"
+            w.drives.boredom = 1.0      # ضجِرٌ تماماً
+            w.drives.confusion = 0.9    # وحائر
+            rep = w.journey(pages=3)
+        self.assertEqual(set(rep.urges), {"تجوّل"}, "قادته دوافعه رغم أنه خطّ مرجعي")
+        self.assertGreater(w.drives.boredom, 0.0, "الدوافع تُقاس رغم أنها لا تقود")
+
+    def test_service_is_off_in_baseline_arms(self) -> None:
+        """لو خدم الخطّ المرجعي صاحبه لما بقي خطّاً مرجعياً."""
+        for mode in ("جِدّة", "عشوائي"):
+            with LocalNet() as base:
+                w = self._wanderer(base)
+                w.mode = mode
+                w.p.service_bias = 1.0
+                rep = w.journey(pages=2)
+            self.assertNotIn("فجوة", rep.urges, mode)
+            self.assertEqual(w._find_gaps(), [], mode)
+
+    def test_journey_records_what_it_learned_and_under_which_mode(self) -> None:
+        with LocalNet() as base:
+            w = self._wanderer(base)
+            w.mode = "جِدّة"
+            rep = w.journey(pages=3)
+        row = self.body.conn.execute(
+            "SELECT gain, mode FROM journeys ORDER BY id DESC LIMIT 1").fetchone()
+        self.assertEqual(row["mode"], "جِدّة")
+        self.assertAlmostEqual(row["gain"], rep.gain, places=3)
+        self.assertGreater(row["gain"], 0.0)
+
+    def test_the_two_arms_report_different_learning(self) -> None:
+        """التوقيع التجريبي: الجِدّة الصرفة تسجّل تعلّماً أكثر لأنها تكافئ
+        ما لا يتّصل بشيء — وهذا هو فخّ «التلفاز المشوّش» بالأرقام."""
+        gains = {}
+        for mode in ("كامل", "جِدّة"):
+            tmp = tempfile.TemporaryDirectory()
+            body = Body(Path(tmp.name) / "b.db")
+            with LocalNet() as base:
+                p = Personality.default()
+                p.curiosity = 0.0
+                p.research_bias = 0.0
+                p.service_bias = 0.0
+                p.seed_interests = []
+                p.languages = {lg: 1.0 for lg in PAGES}
+                src = {"wiki_langs": [], "wikinews_langs": [],
+                       "feeds": {lg: [{"name": lg, "url": f"{base}/feed/{lg}.xml"}]
+                                 for lg in PAGES}}
+                gains[mode] = Wanderer(
+                    body, p, Mind(p, use_llm=False),
+                    fetcher=Fetcher(delay=0.0, respect_robots=False),
+                    source_map=src, mode=mode).journey(pages=4).gain
+            body.close()
+            tmp.cleanup()
+        self.assertGreater(gains["جِدّة"], gains["كامل"])
 
     def test_blocked_host_is_respected(self) -> None:
         with LocalNet() as base:

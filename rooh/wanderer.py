@@ -36,6 +36,7 @@ class JourneyReport:
     highlights: list[tuple[str, str]] = field(default_factory=list)
     journal: str = ""
     duration: float = 0.0
+    gain: float = 0.0                                  # مجموع ما تعلّمه
     urges: list[str] = field(default_factory=list)     # ما أراده في كل خطوة
     asked: list[str] = field(default_factory=list)     # أسئلة فتحها
     answered: list[str] = field(default_factory=list)  # أسئلة أغلقها
@@ -53,6 +54,7 @@ class Wanderer:
         source_map: Optional[dict] = None,
         rng: Optional[random.Random] = None,
         on_event: Optional[Callable[[str, dict], None]] = None,
+        mode: str = "كامل",
     ):
         self.body = body
         self.p = personality
@@ -61,6 +63,8 @@ class Wanderer:
         self.sources = source_map or sources.load_sources(config.sources_path())
         self.f = fetcher or Fetcher(respect_robots=self.p.respect_robots)
         self.on_event = on_event or (lambda kind, data: None)
+        # وضع التجربة: «كامل» رُوح، و«جِدّة»/«عشوائي» خطّان مرجعيان
+        self.mode = mode
         # مقالات جلبناها من خلاصة ولم نزرها بعد، مفهرسة باللغة
         self._pending: dict[str, list[Destination]] = {}
         self._refills: dict[str, int] = {}      # كم مرّة ملأنا طابور كل لغة
@@ -105,7 +109,8 @@ class Wanderer:
         while report.stored < budget and attempts < max_attempts:
             attempts += 1
             has_q = self.body.count_open_questions() > 0
-            urge = self.drives.urge(has_q)
+            # الخطّ المرجعي العشوائي: الدوافع تُقاس ولا تقود
+            urge = "تجوّل" if self.mode == "عشوائي" else self.drives.urge(has_q)
             if urge == "عودة":
                 # تعِب. لا فائدة من تجوّلٍ بلا انتباه.
                 report.came_home_early = True
@@ -113,7 +118,8 @@ class Wanderer:
                 break
             # تجواله الحرّ يُسخَّر لسدّ فجواتك. لا يزاحم تعبَه ولا حيرته
             # ولا سؤالاً معلّقاً — تلك حاجاته هو، وهذه خدمته لك.
-            if (urge in ("تجوّل", "غريب") and self._gaps and not only_lang
+            if (self.mode == "كامل" and urge in ("تجوّل", "غريب")
+                    and self._gaps and not only_lang
                     and self.rng.random() < self.p.service_bias):
                 urge = "فجوة"
             report.urges.append(urge)
@@ -173,7 +179,9 @@ class Wanderer:
 
             # ما مقدار الجديد في هذه الصفحة؟ عليه تدور حالته كلها.
             novelty = Drives.novelty(keywords, known)
-            gain = self.drives.observe(novelty, self.p.openness, self.p.depth)
+            gain = self.drives.observe(novelty, self.p.openness, self.p.depth,
+                                       self.mode)
+            report.gain += gain
 
             # أسئلة أغلقتها هذه الصفحة
             closed = self.body.resolve_by_keywords(keywords, page_lang, mem_id)
@@ -238,7 +246,8 @@ class Wanderer:
         self.body.write_journal(jid, report.journal)
         self._save_journal_file(jid, report)
         self.body.end_journey(jid, langs=seen_langs, visited=report.visited,
-                              stored=report.stored, failed=report.failed)
+                              stored=report.stored, failed=report.failed,
+                              gain=report.gain, mode=self.mode)
         self.on_event("home", {"stored": report.stored, "visited": report.visited})
         return report
 
@@ -249,7 +258,7 @@ class Wanderer:
         بلا شبكة: يعمل بما في معجمه وما جمعه. أوّل رحلاته لا فجوات فيها
         لأن معجمه فارغ — وهذا صحيح، لا نصطنع له فجوات لا يملك دليلها.
         """
-        if self.p.service_bias <= 0:
+        if self.p.service_bias <= 0 or self.mode != "كامل":
             return []
         langs = list(self.p.languages)
         out: list[tuple[str, str]] = []
@@ -275,6 +284,9 @@ class Wanderer:
 
     def _pick_language_for(self, urge: str) -> str:
         """النزوع يختار اللسان أيضاً، لا الوجهة وحدها."""
+        if self.mode == "عشوائي":
+            # بالتساوي، لا بأوزان الشخصية: هذا معنى أن يكون خطّاً مرجعياً
+            return self.rng.choice(list(self.p.languages)) if self.p.languages else "en"
         if urge == "مألوف":
             # أرضٌ يعرفها: اللسان الذي له فيه أكثر الذكريات
             rows = self.body.conn.execute(
@@ -395,6 +407,8 @@ class Wanderer:
         if seed:
             doors.append(lambda: self._search_wiki(lg, seed))
 
+        if self.mode == "عشوائي":
+            self.rng.shuffle(doors)
         for door in doors:
             dest = door()
             if dest is not None:

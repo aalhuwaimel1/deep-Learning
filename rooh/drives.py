@@ -21,6 +21,12 @@ import json
 from dataclasses import asdict, dataclass
 from typing import Optional
 
+#: أوضاع التجربة. «كامل» هو رُوح؛ والآخران خطّان مرجعيان تُقاس عليهما.
+#:   كامل  : القوس المقلوب فوق الجِدّة (رُوح)
+#:   جِدّة  : المكافأة = الجِدّة نفسها — وكيل «التلفاز المشوّش» الكلاسيكي
+#:   عشوائي: لا دوافع تقود؛ الوجهة تُختار بالتساوي
+MODES = ("كامل", "جِدّة", "عشوائي")
+
 
 def _clamp(x: float) -> float:
     return max(0.0, min(1.0, x))
@@ -47,12 +53,22 @@ class Drives:
         return fresh / len(keywords)
 
     @staticmethod
-    def learning(novelty: float, openness: float = 0.5) -> float:
+    def learning(novelty: float, openness: float = 0.5,
+                 mode: str = "كامل") -> float:
         """كم تعلّم من صفحةٍ جِدّتُها كذا؟ ذروتها في المنطقة الخصبة.
 
         الانفتاح يزحزح الذروة: المنفتح يتعلّم من الأغرب، والمتحفّظ يحتاج
         أرضاً مألوفة أكثر ليربط عليها.
+
+        وضع «جِدّة» هو الخطّ المرجعي: المكافأة تساوي الجِدّة نفسها بلا
+        قوسٍ مقلوب. هذا هو الوكيل الذي يحدّق في «التلفاز المشوّش» إلى
+        الأبد، لأن الضوضاء المحضة جديدةٌ دائماً فمكافأتها قصوى دائماً.
+        الفرق بين السطرين التاليين هو كامل الفرق بين الأطروحة وخطّها
+        المرجعي.
         """
+        if mode == "جِدّة":
+            return _clamp(novelty)
+
         op = _clamp(openness)
         peak = 0.30 + 0.35 * op                   # ٠٫٣ للمتحفّظ، ٠٫٦٥ للمنفتح
         # قاعدة المنحنى يجب ألا تتجاوز الجِدّة ١٫٠ مهما بلغ الانفتاح: صفحةٌ
@@ -65,9 +81,9 @@ class Drives:
 
     # ── التحديث بعد كل صفحة ──────────────────────────────────────────────
     def observe(self, novelty: float, openness: float = 0.5,
-                depth: float = 0.6) -> float:
+                depth: float = 0.6, mode: str = "كامل") -> float:
         """يهضم أثر صفحةٍ واحدة على حالته. يعيد مقدار ما تعلّمه منها."""
-        gain = self.learning(novelty, openness)
+        gain = self.learning(novelty, openness, mode)
 
         if novelty < 0.15:                       # عرفها سلفاً
             self.boredom = _clamp(self.boredom + 0.16)
