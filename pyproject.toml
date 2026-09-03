@@ -14,7 +14,8 @@ dependencies = []          # النواة بالمكتبة القياسية وح
 [project.optional-dependencies]
 mind = ["anthropic>=0.40"]         # تلخيص وتأمّل بنموذج لغوي
 senses = ["beautifulsoup4>=4.12"]  # استخلاص HTML أدقّ
-all = ["anthropic>=0.40", "beautifulsoup4>=4.12"]
+words = ["stopwordsiso>=0.6"]      # قوائم توقّف لـ٥٨ لغة
+all = ["anthropic>=0.40", "beautifulsoup4>=4.12", "stopwordsiso>=0.6"]
 
 [project.scripts]
 rooh = "rooh.cli:main"

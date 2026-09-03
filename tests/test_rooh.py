@@ -169,6 +169,22 @@ class TestLang(unittest.TestCase):
         self.assertTrue(one.endswith("।"), one)
         self.assertLess(len(one), len(self.WORLD["hi"]))
 
+    def test_stopwords_merge_and_survive_absence(self) -> None:
+        """القوائم الخارجية تحسّن ولا تُشترط: النواة تعمل بلا حزمة."""
+        ar = lang.stopwords_for("ar")
+        self.assertIn("في", ar)
+        self.assertIn("على", ar)
+        self.assertEqual(lang.stopwords_for("لا-توجد"), set())
+
+    def test_function_words_never_become_keywords(self) -> None:
+        it = ("L'intelligenza artificiale è uno dei campi più importanti. "
+              "Da un lato i modelli hanno bisogno di enormi quantità di dati. "
+              "Dall'altro lato il costo dell'addestramento è molto alto. ") * 5
+        kws = lang.keywords(it, "it", 8)
+        for junk in ("per", "hanno", "lato", "dell", "uno", "molto"):
+            self.assertNotIn(junk, kws, f"«{junk}» حشوٌ نحويّ لا مفتاح: {kws}")
+        self.assertIn("modelli", kws)
+
     def test_script_detection(self) -> None:
         self.assertEqual(lang.script_of(PAGES["zh"][1]), "cjk")
         self.assertEqual(lang.script_of(PAGES["ru"][1]), "cyrillic")
@@ -729,6 +745,29 @@ class TestDesires(unittest.TestCase):
         self.assertTrue(p.repels("أخبار السياسة"))
         self.assertEqual(p.wants(), ["الفلك"])
         self.assertTrue(p.is_blocked("x.com", "تحليل السياسة اليوم"))
+
+    def test_humor_is_a_dial_not_a_switch(self) -> None:
+        p = Personality.default()
+        seen = set()
+        for h in (0.0, 0.3, 0.6, 0.95):
+            p.humor = h
+            seen.add(p.persona())
+        self.assertEqual(len(seen), 4, "درجات خفّة الظل لا تُنتج تعليماتٍ مختلفة")
+
+    def test_wit_never_outranks_accuracy(self) -> None:
+        """قيدٌ مبنيٌّ في التعليمة: كائنٌ يلوي الحقيقة لأجل نكتة أسوأ من ممل."""
+        p = Personality.default()
+        for h in (0.0, 0.5, 1.0):
+            p.humor = h
+            text = p.persona()
+            self.assertIn("لا تقدّم الطرافة على", text)
+            self.assertIn("لا تضف معلومةً ليست في النصّ", text)
+
+    def test_persona_carries_identity_and_voice(self) -> None:
+        p = Personality.default()
+        p.name = "سراج"
+        self.assertIn("سراج", p.persona())
+        self.assertIn(p.essence, p.persona())
 
     def test_persistence_sets_how_long_he_chases(self) -> None:
         p = Personality.default()

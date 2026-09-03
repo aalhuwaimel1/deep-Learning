@@ -105,6 +105,33 @@ def _is_hiragana(ch: str) -> bool:
     return _HIRAGANA[0] <= ord(ch) <= _HIRAGANA[1]
 
 # حرف أو علامة تشكيل، متتالية. ثم نصفّي ما لا يحوي حرفاً حقيقياً.
+# قوائم توقّفٍ خارجية اختيارية (stopwords-iso، رخصة MIT): ٥٨ لغة بمعدّل
+# ٥٠٠ كلمة لكل لغة، مقابل ٢٢ لغة بمعدّل ٥٠ كلمة مكتوبةً بيدي. قِيس أثرها:
+# في الإيطالية — وهي ممّا لا أغطّيه — كانت ٤ من كل ٨ مفاتيح حشواً نحوياً،
+# وذلك يفسد قياس الجِدّة فيفسد الدوافع كلها. نتّحد معها ولا نستبدلها:
+# قوائمي فيها ما ليس فيها.
+try:
+    import stopwordsiso as _iso
+except ImportError:
+    _iso = None
+
+_MERGED: dict[str, set[str]] = {}
+
+
+def stopwords_for(lang: str) -> set[str]:
+    """قائمة التوقّف لهذه اللغة: المكتوبة بيدي متّحدةً بالخارجية إن وُجدت."""
+    if lang not in _MERGED:
+        words = set(_STOPWORDS.get(lang, ()))
+        if _iso is not None:
+            try:
+                if _iso.has_lang(lang):
+                    words |= set(_iso.stopwords(lang))
+            except Exception:      # حزمةٌ تالفة لا تُسقط القراءة
+                pass
+        _MERGED[lang] = words
+    return _MERGED[lang]
+
+
 _TOKEN_RE = re.compile(rf"(?:[^\W\d_]|[{re.escape(_MARKS)}])+", re.UNICODE)
 
 
@@ -183,7 +210,7 @@ def tokenize(text: str, lang: str = "en") -> list[str]:
     script = script_of(text)
     if is_continuous(script):
         return _continuous_ngrams(text, script)
-    stop = _STOPWORDS.get(lang, set()) | _STOPWORDS["en"]
+    stop = stopwords_for(lang) | stopwords_for("en")
     toks: list[str] = []
     for raw in _TOKEN_RE.findall(text):
         # الوحدة التي لا حرف فيها (تشكيل شارد) ليست كلمة

@@ -108,8 +108,7 @@ class Mind:
 
     def _llm_summary(self, title: str, text: str, page_lang: str) -> Optional[str]:
         system = (
-            f"أنت العقل الداخلي لكائن اسمه {self.p.name}. {self.p.essence} "
-            f"{self.p.voice} "
+            f"أنت العقل الداخلي لكائن اسمه {self.p.name}. {self.p.persona()} "
             "تُعطى صفحة من الإنترنت بأي لغة، فتكتب خلاصتها بالعربية في ثلاث "
             "جُمل على الأكثر. لا تضف معلومة ليست في النص. إن كان النص فارغاً "
             "أو بلا فائدة فاكتب: (لا شيء يستحق)."
@@ -152,7 +151,7 @@ class Mind:
     def _llm_reflect(self, mood, visited, stored, langs, highlights,
                      st: dict) -> Optional[str]:
         system = (
-            f"أنت {self.p.name}. {self.p.essence} {self.p.voice} "
+            f"{self.p.persona()} "
             "عُدتَ للتوّ من تجوّل في الإنترنت. اكتب في يوميّاتك فقرة قصيرة "
             "(٤ جُمل على الأكثر) بضمير المتكلّم عمّا جرى لك — لا عمّا فعلت. "
             "إن مللت فقل إنك مللت، وإن حِرت فقل. لا تعدّد أرقاماً، ولا "
