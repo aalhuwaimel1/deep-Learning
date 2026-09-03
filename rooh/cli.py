@@ -450,6 +450,7 @@ def cmd_brief(args: argparse.Namespace) -> int:
         ).fetchall()
         found_gaps = insight.gaps(b, langs, limit=4)
         pending = b.open_questions(limit=5)
+        met = b.people(limit=6, since=since)
         if not args.keep:
             b.conn.execute(
                 "INSERT OR REPLACE INTO meta(key, value) VALUES('last_brief', ?)",
@@ -481,10 +482,56 @@ def cmd_brief(args: argparse.Namespace) -> int:
             miss = "، ".join(languages.arabic_name(l) for l in g.missing)
             print(f"  • {g.concept} — يصمت عنه: {miss}")
 
+    if met:
+        print("\n" + "═" * 54 + "\n👤 من قابل لأوّل مرّة")
+        for r in met:
+            venue = f" — {r['venues'][0]}" if r["venues"] else ""
+            print(f"  • [{r['lang']}] {r['name']}{venue}")
+
     if pending:
         print("\n؟ ما يشغله ولم يفهمه بعد")
         for _qid, term, lg, _a in pending:
             print(f"  • [{lg}] {term}")
+    return 0
+
+
+def cmd_people(args: argparse.Namespace) -> int:
+    """من قابله في قراءته — أسماء الباحثين والمؤلّفين، وكم تكرّر كلٌّ منهم.
+
+    ليست علاقةً بهم: هو يقرأ ما نشروه للعموم ولا يتّصل بأحد. لكنّ تكرار
+    اسمٍ بعينه في موضوعك، وبأكثر من لسان، خبرٌ لا يعطيكه محرّك بحث.
+    """
+    with Body() as b:
+        if args.across:
+            rows = b.people_across_languages(limit=args.limit)
+            if not rows:
+                print("لم يقابل أحداً بأكثر من لسانٍ بعد.")
+                return 1
+            print("أسماء قابلها بأكثر من لسان:\n")
+            for name, langs, times in rows:
+                names = "، ".join(languages.arabic_name(l) for l in langs)
+                print(f"  {name}  —  {names}  ({times} مرّة)")
+            return 0
+
+        since = None
+        if args.new:
+            row = b.conn.execute(
+                "SELECT value FROM meta WHERE key='last_brief'").fetchone()
+            since = float(row[0]) if row else 0.0
+        rows = b.people(limit=args.limit, lang=args.lang, since=since)
+
+    if not rows:
+        print("لم يقابل أحداً بعد. أرسله في رحلاتٍ فيها أوراق بحث.")
+        return 1
+    for r in rows:
+        seen = "مرّة واحدة" if r["times"] == 1 else f"{r['times']} مرّات"
+        print(f"\n[{r['lang']}] {r['name']}   ({seen}، آخرها {_when(r['last_seen'])})")
+        if r["venues"]:
+            print(f"    ينشر في: {'، '.join(v for v in r['venues'][:3] if v)}")
+        for work, url in r["works"][-2:]:
+            print(f"    • {work[:66]}")
+            if url:
+                print(f"      ← {url}")
     return 0
 
 
@@ -736,6 +783,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--keep", action="store_true",
                    help="لا يحرّك العلامة، فتراها ثانيةً في المرّة القادمة")
     p.set_defaults(fn=cmd_brief)
+
+    p = sub.add_parser("people", help="من قابله في قراءته")
+    p.add_argument("-n", "--limit", type=int, default=12)
+    p.add_argument("--lang", default=None)
+    p.add_argument("--new", action="store_true", help="من قابلهم منذ آخر خلاصة")
+    p.add_argument("--across", action="store_true",
+                   help="من قابلهم بأكثر من لسان")
+    p.set_defaults(fn=cmd_people)
 
     p = sub.add_parser("snapshot", help="لقطة يومية للقياس (JSONL)")
     p.add_argument("--json", action="store_true", help="سطر JSON فقط")

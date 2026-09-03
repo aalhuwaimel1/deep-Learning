@@ -84,6 +84,23 @@ CREATE TABLE IF NOT EXISTS interests (
 );
 CREATE INDEX IF NOT EXISTS idx_interests_weight ON interests(weight DESC);
 
+-- من يقابلهم في قراءته: أسماء الباحثين والمؤلّفين كما تنشرها قواعد
+-- الأبحاث. ليست علاقةً بهم — هو يقرأ ما نشروه للعموم ولا يتّصل بأحد —
+-- لكنها تجعل سؤال «من صرت تعرف؟» له جواب. وبعد شهور يصير قادراً على
+-- قول ما لا يقوله محرّك بحث: «هذا الاسم يتكرّر في موضوعك بلسانين».
+CREATE TABLE IF NOT EXISTS people (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT NOT NULL,
+    lang       TEXT NOT NULL DEFAULT 'mul',
+    first_seen REAL NOT NULL,
+    last_seen  REAL NOT NULL,
+    times      INTEGER NOT NULL DEFAULT 1,
+    venues     TEXT DEFAULT '[]',
+    works      TEXT DEFAULT '[]',
+    UNIQUE (name, lang)
+);
+CREATE INDEX IF NOT EXISTS idx_people_times ON people(times DESC);
+
 -- المعجم: المفهوم الواحد بأسماء أهله. يُنشأ هنا لا كسولاً عند أوّل
 -- ترجمة: أي قراءةٍ للجسد قبل أوّل ترجمة كانت تنهار على جدولٍ غير موجود.
 CREATE TABLE IF NOT EXISTS lexicon (
@@ -494,6 +511,79 @@ class Body:
         self.conn.commit()
         return cur.rowcount
 
+    # ── من يقابلهم ───────────────────────────────────────────────────────
+    #: أقصر اسمٍ نقبله. ما دونه شظيّةٌ من تفكيكٍ رديء لا اسمُ إنسان.
+    MIN_NAME = 3
+
+    def meet(self, name: str, lang: str = "mul", venue: str = "",
+             work: str = "", url: str = "") -> bool:
+        """يسجّل أنه قابل اسماً في قراءته. يعيد True إن كانت أوّل مرّة."""
+        name = " ".join((name or "").split())
+        if len(name) < self.MIN_NAME or name.isdigit():
+            return False
+        now = time.time()
+        row = self.conn.execute(
+            "SELECT id, venues, works FROM people WHERE name=? AND lang=?",
+            (name, lang)).fetchone()
+        if row is None:
+            self.conn.execute(
+                """INSERT INTO people(name, lang, first_seen, last_seen, times,
+                                      venues, works)
+                   VALUES(?,?,?,?,1,?,?)""",
+                (name, lang, now, now,
+                 json.dumps([venue] if venue else [], ensure_ascii=False),
+                 json.dumps([[work, url]] if work else [], ensure_ascii=False)),
+            )
+            return True
+        try:
+            venues = json.loads(row["venues"] or "[]")
+            works = json.loads(row["works"] or "[]")
+        except json.JSONDecodeError:
+            venues, works = [], []
+        if venue and venue not in venues:
+            venues.append(venue)
+        if work and work not in [w[0] for w in works]:
+            works.append([work, url])
+        self.conn.execute(
+            """UPDATE people SET last_seen=?, times=times+1, venues=?, works=?
+               WHERE id=?""",
+            (now, json.dumps(venues[:8], ensure_ascii=False),
+             json.dumps(works[-8:], ensure_ascii=False), row["id"]),
+        )
+        return False
+
+    def people(self, limit: int = 15, lang: Optional[str] = None,
+               since: Optional[float] = None) -> list[dict]:
+        sql = "SELECT * FROM people WHERE 1=1"
+        args: list = []
+        if lang:
+            sql += " AND lang=?"
+            args.append(lang)
+        if since is not None:
+            sql += " AND first_seen > ?"
+            args.append(since)
+        sql += " ORDER BY times DESC, last_seen DESC LIMIT ?"
+        args.append(limit)
+        out = []
+        for r in self.conn.execute(sql, args).fetchall():
+            try:
+                venues = json.loads(r["venues"] or "[]")
+                works = json.loads(r["works"] or "[]")
+            except json.JSONDecodeError:
+                venues, works = [], []
+            out.append({"name": r["name"], "lang": r["lang"], "times": r["times"],
+                        "first_seen": r["first_seen"], "last_seen": r["last_seen"],
+                        "venues": venues, "works": works})
+        return out
+
+    def people_across_languages(self, limit: int = 10) -> list[tuple[str, list[str], int]]:
+        """أسماءٌ قابلها بأكثر من لسان — وهذا ما لا يعطيك إياه محرّك بحث."""
+        rows = self.conn.execute(
+            """SELECT name, GROUP_CONCAT(lang) langs, SUM(times) t
+               FROM people GROUP BY name HAVING COUNT(DISTINCT lang) > 1
+               ORDER BY t DESC LIMIT ?""", (limit,)).fetchall()
+        return [(r["name"], sorted(set(r["langs"].split(","))), r["t"]) for r in rows]
+
     # ── الدوافع ──────────────────────────────────────────────────────────
     def save_drives(self, raw: str) -> None:
         self.conn.execute(
@@ -565,6 +655,7 @@ class Body:
                 # خطّها المرجعي. بدونه تُقاس الحركة ولا يُقاس التعلّم.
                 "learning_gain": round(
                     one("SELECT COALESCE(SUM(gain),0) FROM journeys"), 4),
+                "people": one("SELECT COUNT(*) FROM people"),
             },
             "delta": {
                 "journeys": one(
@@ -580,6 +671,8 @@ class Body:
                 "learning_gain": round(one(
                     "SELECT COALESCE(SUM(gain),0) FROM journeys WHERE started_at > ?",
                     (since,)), 4),
+                "people_met": one(
+                    "SELECT COUNT(*) FROM people WHERE first_seen > ?", (since,)),
             },
             "languages": by_lang("1=1", ()),
             "languages_delta": by_lang("created_at > ?", (since,)),

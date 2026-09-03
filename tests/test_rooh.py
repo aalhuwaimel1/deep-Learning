@@ -334,6 +334,33 @@ class TestBody(unittest.TestCase):
         self.assertEqual(snap["languages"], {"ja": 1, "zh": 1})
         self.assertEqual(snap["languages_delta"], {"zh": 1})
 
+    def test_meeting_people(self) -> None:
+        self.assertTrue(self.body.meet("田中 太郎", "ja", venue="物理学会",
+                                       work="論文", url="https://x/1"))
+        self.assertFalse(self.body.meet("田中 太郎", "ja", venue="応用物理",
+                                        work="論文2", url="https://x/2"))
+        row = self.body.people(1)[0]
+        self.assertEqual(row["times"], 2)
+        self.assertEqual(row["venues"], ["物理学会", "応用物理"])
+        self.assertEqual(len(row["works"]), 2)
+
+    def test_fragments_are_not_names(self) -> None:
+        for junk in ("", "  ", "A", "12345", "  x "):
+            self.assertFalse(self.body.meet(junk, "en"), repr(junk))
+        self.assertEqual(self.body.people(10), [])
+
+    def test_same_person_across_languages(self) -> None:
+        """أن يُنشر اسمٌ واحد في عالَمين لغويّين خبرٌ لا يعطيه محرّك بحث."""
+        self.body.meet("Wei Zhang", "ja", venue="日本物理学会誌")
+        self.body.meet("Wei Zhang", "zh", venue="中国物理学报")
+        self.body.meet("María López", "es")
+        across = self.body.people_across_languages()
+        self.assertEqual(len(across), 1)
+        name, langs, times = across[0]
+        self.assertEqual(name, "Wei Zhang")
+        self.assertEqual(langs, ["ja", "zh"])
+        self.assertEqual(times, 2)
+
     def test_stats(self) -> None:
         self.body.remember(title="t", summary="s", lang="ja")
         st = self.body.stats()
@@ -963,12 +990,25 @@ class TestJourney(unittest.TestCase):
             w = self._wanderer(base)
             w.p.research_bias = 1.0
             w.p.seed_interests = ["الذكاء الاصطناعي"]
+            captured: list = []
+            original_read = w._read
+            w._read = lambda d: (captured.append(d.payload), original_read(d))[1]
             with patch.object(research, "search_papers", return_value=made):
                 w.journey(pages=1, only_lang="es")
+        self.assertTrue(captured, "لم تُبنَ محطّة ورقةٍ أصلاً")
+        self._last_paper_payload = captured[0] or {}
 
         terms = [t for t, _lg, _w in self.body.top_interests(20)]
         for label in ("الباحثون", "المنشور", "السنة", "doi"):
             self.assertNotIn(label, terms, f"تسرّبت «{label}» إلى فضوله: {terms}")
+        # الاختبار أعلاه وحده كان ينجح لسببٍ خاطئ: التسميات تظهر مرّةً
+        # واحدة في ملخّصٍ طويل فيرميها فلتر التكرار صدفةً، لا لأن الإصلاح
+        # يعمل. نتحقّق من الآلية نفسها لا من أثرها العَرَضي.
+        dest_payload = self._last_paper_payload
+        self.assertIn("content", dest_payload, "الحمولة بلا محتوى علمي منفصل")
+        for label in ("الباحثون:", "المنشور في:", "DOI:"):
+            self.assertNotIn(label, dest_payload["content"])
+        self.assertIn("agricultura", dest_payload["content"])
         self.assertTrue(any(t in ("aprendizaje", "agricultura", "modelo", "andes",
                                   "profundo", "artículo", "computadora", "cultivos",
                                   "precisión", "plagas", "visión", "presenta")
@@ -977,6 +1017,33 @@ class TestJourney(unittest.TestCase):
         row = self.body.conn.execute("SELECT body FROM memories").fetchone()
         self.assertIn("María López", row["body"])
         self.assertIn("DOI:", row["body"])
+
+    def test_authors_reach_the_body_from_papers(self) -> None:
+        """انحدار: الأسماء كانت تُدفَن في نصّ الذكرى، فسؤال «من قابلت؟»
+        بلا جواب رغم أن البيانات تمرّ عليه من أربع قواعد."""
+        from unittest.mock import patch
+
+        made = [research.Paper(
+            title="量子誤り訂正の研究", lang="ja", year=2025,
+            abstract="本研究では量子誤り訂正符号の新しい構成法を提案する。"
+                     "従来手法と比較して誤り率が大幅に低減されることを示した。",
+            authors=["田中 太郎", "Wei Zhang"], venue="日本物理学会誌",
+            doi="10.1/x", url="https://ja.example/1", provider="openalex")]
+        with LocalNet() as base:
+            w = self._wanderer(base)
+            w.p.research_bias = 1.0
+            w.p.seed_interests = ["الحوسبة الكمية"]
+            with patch.object(research, "search_papers", return_value=made), \
+                 patch.object(sources, "translate_term", return_value=None):
+                rep = w.journey(pages=1, only_lang="ja")
+
+        self.assertEqual(sorted(rep.met), ["Wei Zhang", "田中 太郎"])
+        names = {r["name"] for r in self.body.people(10)}
+        self.assertEqual(names, {"Wei Zhang", "田中 太郎"})
+        row = next(r for r in self.body.people(10) if r["name"] == "Wei Zhang")
+        self.assertEqual(row["lang"], "ja")
+        self.assertEqual(row["venues"], ["日本物理学会誌"])
+        self.assertEqual(row["works"][0][1], "https://ja.example/1")
 
     def test_paper_without_abstract_is_skipped(self) -> None:
         """ورقة بعنوان بلا ملخّص ليست معرفة — لا تدخل الجسد."""

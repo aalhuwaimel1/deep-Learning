@@ -167,6 +167,8 @@ class Mind:
         ]
         if st.get("answered"):
             lines.append(f"أسئلة أغلقتها أخيراً: {'، '.join(st['answered'][:5])}")
+        if st.get("met"):
+            lines.append(f"أسماء قابلتها لأوّل مرّة: {'، '.join(st['met'][:5])}")
         if st.get("asked"):
             lines.append(f"أشياء مرّت بي ولا أعرفها: {'، '.join(st['asked'][:5])}")
         if st.get("aspiration"):
@@ -185,6 +187,8 @@ class Mind:
             lines.append(f"تجوّلت في: {'، '.join(langs)}.")
         if st.get("answered"):
             lines.append(f"أغلقت أخيراً: {'، '.join(st['answered'][:4])}.")
+        if st.get("met"):
+            lines.append(f"وقابلت لأوّل مرّة: {'، '.join(st['met'][:4])}.")
         if st.get("asked"):
             lines.append(f"ومرّ بي ما لا أعرفه: {'، '.join(st['asked'][:4])}.")
         if highlights:

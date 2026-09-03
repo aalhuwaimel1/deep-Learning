@@ -11,7 +11,7 @@ Status: Working draft, revised after a line-by-line audit of every **[CLAIM]** a
 
 This is the first written record of an idea that will be developed for at least five years. It is deliberately written as a research document, not a product brochure, because the discipline of separating *what is built*, *what is measured*, and *what is intended* is the only thing that lets the idea grow without collapsing into vague claims.
 
-The system it describes exists as version 0.1 (about 4,000 lines of Python, standard library only, 103 offline tests). It has **not yet been run on the real internet**. Every number in this document comes from code or from runs against a local mock network. The first real-internet run is the first real experiment.
+The system it describes exists as version 0.1 (about 4,000 lines of Python, standard library only, 107 offline tests). It has **not yet been run on the real internet**. Every number in this document comes from code or from runs against a local mock network. The first real-internet run is the first real experiment.
 
 ---
 
@@ -132,7 +132,7 @@ Novelty falls monotonically as the interest map absorbs the topic's vocabulary, 
 ## 5. System architecture **[CLAIM]**
 
 **5.1 Three parts, one of which leaves the device.**
-- **Body** — one SQLite file under `~/.rooh/` with eight tables: `meta`, `journeys`, `pages`, `memories`, `interests`, `questions`, `journal`, `lexicon`. Never leaves the device.
+- **Body** — one SQLite file under `~/.rooh/` with nine tables: `meta`, `journeys`, `pages`, `memories`, `interests`, `questions`, `journal`, `lexicon`, `people`. Never leaves the device.
 - **Soul** — the wanderer. Goes out, reads in the native language of the sites it visits (not through translation), returns, and deposits everything in the body. Keeps nothing.
 - **Character** — `personality.json`: name, temperament, writing style, obsessions, aversions, aspiration, openness, persistence, service_bias, and time allocation across languages.
 
@@ -146,11 +146,13 @@ Novelty falls monotonically as the interest map absorbs the topic's vocabulary, 
 
 **5.6 Honesty built into computation.** "No coverage in Korean" is a fact about the world only if Rooh has actually visited Korean sources. Otherwise it is a fact about Rooh. The two are separated in the calculation itself, not only in the display: *visited often and found nothing* is a real gap; *not visited enough* is a deficit in Rooh and is labeled as such. A concept with no equivalent in a language is reported explicitly and not counted as a coverage gap. The Wikipedia-gap systems in Section 6.2 do not face this distinction, because they operate on complete static corpora where coverage is given. For a live agent assembling its picture incrementally, it is the central problem, and no prior work reviewed here addresses it.
 
-**5.7 Research sources.** Four open databases, no keys: OpenAlex (~250M works; the only one filtering by language of the paper itself), Crossref (~150M DOIs), arXiv, DOAJ (open-access journals in Spanish, Portuguese, Indonesian, Persian). Paper metadata is stored for display but only title and abstract are digested; an earlier version digested metadata and "researchers" and "year" became top interests. Fixed and regression-tested.
+**5.7 Research sources.** Four open databases, no keys: OpenAlex (~250M works; the only one filtering by language of the paper itself), Crossref (~150M DOIs), arXiv, DOAJ (open-access journals in Spanish, Portuguese, Indonesian, Persian). Paper metadata is stored for display but only title and abstract are digested; an earlier version digested metadata and "researchers" and "year" became top interests. **This fix was claimed in an earlier revision of this document while not actually in effect**: the patch that added the separated field silently failed to apply, and the regression test passed for an unrelated reason — the Arabic labels appeared once each in a long Spanish abstract and were dropped by a frequency filter, not by the fix. Both are now corrected, and the test asserts the mechanism (the separated field's contents) rather than its incidental effect. Recorded here because a document that separates **[CLAIM]** from **[INTENT]** is worth nothing if a [CLAIM] can be false.
+
+**5.7b People encountered.** Author names arrive with every paper from all four databases and were previously buried in the memory's text blob, so "whom has it come to know?" had no answer although the data passed through. They are now first-class: a `people` table recording name, language, times encountered, venues, and sample works. This is not a relationship — Rooh reads what people published publicly and contacts no one — but after months it answers a question no search engine does: *this name recurs in your topic across two language-worlds.* `rooh people --across` reports exactly that.
 
 **5.8 Manners.** Honest User-Agent, `robots.txt` respected, no host hit faster than once per two seconds, no paywalls bypassed, no logins, no personal data collected. Owner-configurable `hosts_blocked` and `terms_blocked`.
 
-**5.9 Modules and size.** body 519 lines, wanderer 564, drives 180, insight 245, mind 211, lang 257, languages 154, research 256, sources 267, personality 172, senses 156, net 150, cli 769 (20 commands); tests 1,255 lines, 103 tests, all offline. Standard library only; `anthropic` (summarizing into Arabic regardless of source language, journal in character voice, cross-world comparison prose) and `beautifulsoup4` are optional.
+**5.9 Modules and size.** body 519 lines, wanderer 564, drives 180, insight 245, mind 211, lang 257, languages 154, research 256, sources 267, personality 172, senses 156, net 150, cli 812 (21 commands); tests 1,326 lines, 107 tests, all offline. Standard library only; `anthropic` (summarizing into Arabic regardless of source language, journal in character voice, cross-world comparison prose) and `beautifulsoup4` are optional.
 
 **5.10 Measured footprint.** Peak memory 28 MB (Python itself 25), 5 ms CPU per page, 42 KB storage per page. At 200 pages/day: 3.1 GB/year, 31 GB/decade. The program runs on any ten-year-old machine; almost all wall time is network wait. The only real hardware question is where the *mind* (the language model) sits: via API on any modern laptop, or locally (16 GB unified memory for a 7–8B model, 32 GB for ~30B, 64 GB for ~70B). `rooh live` implies a 24-hour service, so the correct deployment separates a small always-on device holding the body from the laptop used to query it over the local network.
 

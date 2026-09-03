@@ -38,6 +38,7 @@ class JourneyReport:
     duration: float = 0.0
     gain: float = 0.0                                  # مجموع ما تعلّمه
     urges: list[str] = field(default_factory=list)     # ما أراده في كل خطوة
+    met: list[str] = field(default_factory=list)       # من قابلهم لأوّل مرّة
     asked: list[str] = field(default_factory=list)     # أسئلة فتحها
     answered: list[str] = field(default_factory=list)  # أسئلة أغلقها
     filled: list[tuple[str, str]] = field(default_factory=list)  # فجوات سدّها
@@ -212,6 +213,15 @@ class Wanderer:
             self.on_event("learned", {"novelty": round(novelty, 2),
                                       "gain": round(gain, 2),
                                       "mood": self.drives.mood()})
+            # من كتب هذه الورقة؟ الأسماء تمرّ عليه في كل ورقة، وكانت
+            # تُدفَن في نصّ الذكرى فلا يبقى لسؤال «من صرت تعرف؟» جواب.
+            payload = dest.payload or {}
+            for author in payload.get("authors", []):
+                if self.body.meet(author, page_lang, venue=payload.get("venue", ""),
+                                  work=title, url=dest.url):
+                    report.met.append(author)
+                    self.on_event("met", {"name": author, "lang": page_lang})
+
             report.stored += 1
             if urge == "فجوة" and self._gaps:
                 concept, _lang = self._gaps.pop(0)
@@ -239,6 +249,7 @@ class Wanderer:
             report.highlights,
             state={"urges": list(dict.fromkeys(report.urges)),
                    "asked": report.asked, "answered": report.answered,
+                   "met": report.met,
                    "filled": [c for c, _lg in report.filled],
                    "aspiration": self.p.aspiration,
                    "came_home_early": report.came_home_early},
@@ -484,8 +495,11 @@ class Wanderer:
                 Destination(url=pp.url or f"doi:{pp.doi}", lang=pp.lang or lg,
                             source=f"{pp.provider}: {pp.venue or 'بحث'}",
                             title=pp.title, kind="paper",
-                            payload={"text": pp.as_text(), "year": pp.year,
-                                     "cited_by": pp.cited_by, "doi": pp.doi})
+                            payload={"text": pp.as_text(),
+                                     "content": pp.scholarly_text(),
+                                     "authors": pp.authors, "venue": pp.venue,
+                                     "year": pp.year, "cited_by": pp.cited_by,
+                                     "doi": pp.doi})
                 for pp in papers if pp.url or pp.doi
             ]
             self.rng.shuffle(queue)
