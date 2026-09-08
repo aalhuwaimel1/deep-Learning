@@ -16,6 +16,15 @@ set -uo pipefail
 
 ROOH_HOME="${ROOH_HOME:-$HOME/.rooh}"
 export ROOH_HOME
+
+# cron لا يورّث بيئتك. والرمزُ في سطر crontab يظهر في ps ويُقرأ من ملفّ
+# الجدولة، فنقرأه من ملفٍّ صلاحيّته 600 بدل ذلك.
+if [ -f "$ROOH_HOME/env" ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . "$ROOH_HOME/env"
+  set +a
+fi
 ROOH_BIN="${ROOH_BIN:-}"
 PAGES="${ROOH_PAGES:-8}"
 WANDER_TIMEOUT="${ROOH_WANDER_TIMEOUT:-1800}"   # نصف ساعة لكل رحلة
