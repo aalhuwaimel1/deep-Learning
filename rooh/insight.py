@@ -191,6 +191,103 @@ def gaps(body: Body, langs: list[str], limit: int = 10,
     return found[:limit]
 
 
+# ── الفارق الزمني: من سبق من ───────────────────────────────────────────
+@dataclass
+class Lead:
+    """متى ناقش كل عالَمٍ لغويٍّ هذا الموضوع أوّل مرّة."""
+    concept: str
+    firsts: dict[str, tuple[float, str]] = field(default_factory=dict)  # lang→(متى, عنوان)
+
+    @property
+    def earliest(self) -> Optional[str]:
+        return min(self.firsts, key=lambda l: self.firsts[l][0]) if self.firsts else None
+
+    def lag_days(self, lang: str) -> Optional[float]:
+        """كم تأخّر هذا اللسان عن أسبق لسان، بالأيام."""
+        first = self.earliest
+        if first is None or lang not in self.firsts:
+            return None
+        return (self.firsts[lang][0] - self.firsts[first][0]) / 86400.0
+
+
+def temporal_lead(body: Body, concept: str, langs: list[str],
+                  fetcher: Optional[Fetcher] = None,
+                  learn: bool = False) -> Lead:
+    """أيّ عالَمٍ لغويٍّ سبق غيره إلى هذا الموضوع، وبكم.
+
+    هذا هو ادّعاء «تصل متأخّراً سنةً أو سنتين» محسوباً بدل أن يكون
+    مقولة. ويُقاس بتاريخ **نشر** الأصل لا بتاريخ قراءته: الثاني يقيس
+    ترتيب تجواله هو، لا ترتيب العالم.
+    """
+    out = Lead(concept=concept)
+    for lg in langs:
+        term = concept if lg == "ar" else _known_translation(body, concept, lg)
+        if term is None and learn and fetcher is not None:
+            term = sources.translate_term(fetcher, body.conn, concept, "ar", lg)
+        if not term:
+            continue
+        like = f"%{term}%"
+        row = body.conn.execute(
+            """SELECT published, title FROM memories
+               WHERE lang = ? AND published IS NOT NULL
+                 AND (title LIKE ? OR summary LIKE ? OR body LIKE ? OR keywords LIKE ?)
+               ORDER BY published ASC LIMIT 1""",
+            (lg, like, like, like, like),
+        ).fetchone()
+        if row:
+            out.firsts[lg] = (row["published"], row["title"] or "")
+    return out
+
+
+def render_lead(lead: Lead) -> str:
+    import time as _t
+
+    if len(lead.firsts) < 2:
+        return (f"«{lead.concept}»: لا يكفي ما جمعه لمقارنةٍ زمنية "
+                f"({len(lead.firsts)} عالَم بتواريخ نشرٍ معروفة).")
+    order = sorted(lead.firsts, key=lambda l: lead.firsts[l][0])
+    lines = [f"«{lead.concept}» — من سبق من:\n"]
+    for lg in order:
+        when, title = lead.firsts[lg]
+        lag = lead.lag_days(lg) or 0.0
+        stamp = _t.strftime("%Y-%m", _t.localtime(when))
+        tag = "الأسبق" if lg == order[0] else f"متأخّر {lag/30.4:.0f} شهراً"
+        lines.append(f"  {arabic_name(lg):<12} {stamp}   {tag}")
+        if title:
+            lines.append(f"      {title[:66]}")
+    worst = order[-1]
+    months = (lead.lag_days(worst) or 0) / 30.4
+    if months >= 3:
+        lines.append(f"\n★ الفارق بين الأسبق والأبطأ: {months:.0f} شهراً.")
+    return "\n".join(lines)
+
+
+# ── الأصداء: ما يتّصل بما قرأ ────────────────────────────────────────────
+def echoes(body: Body, keywords: list[str], lang: str, exclude_id: int = -1,
+           limit: int = 5) -> list[tuple[int, str, str, int]]:
+    """ذكرياتٌ سابقة تشترك مع هذه في مفاتيحها.
+
+    كان الكائن يخزّن كل شيء ولا يربط ذكريتين ببعضهما أبداً — جامعٌ بذاكرةٍ
+    مثالية لم تخطر له فكرة قطّ. هذا أبسط ربطٍ ممكن وأصدقه: اشتراكٌ فعليّ
+    في المفاتيح، لا تشابهٌ مُدّعى.
+    """
+    if not keywords:
+        return []
+    scored: dict[int, tuple[str, str, int]] = {}
+    for kw in keywords[:8]:
+        rows = body.conn.execute(
+            """SELECT id, title, lang, keywords FROM memories
+               WHERE id != ? AND keywords LIKE ? LIMIT 40""",
+            (exclude_id, f'%"{kw}"%'),
+        ).fetchall()
+        for r in rows:
+            prev = scored.get(r["id"])
+            scored[r["id"]] = (r["title"] or "", r["lang"],
+                               (prev[2] if prev else 0) + 1)
+    ranked = sorted(scored.items(), key=lambda kv: kv[1][2], reverse=True)
+    return [(mid, t, lg, n) for mid, (t, lg, n) in ranked[:limit] if n >= 2]
+
+
 # ── الصياغة ──────────────────────────────────────────────────────────────
 def render_coverage(cov: Coverage) -> str:
     """عرضٌ نصّي أمين: يفصل ما لا يعرفه عمّا يعرف أنه غير موجود."""

@@ -394,6 +394,30 @@ class TestSources(unittest.TestCase):
         self.assertEqual(sources.parse_feed(rss)[0]["url"], "http://h/1")
         self.assertEqual(sources.parse_feed(atom)[0]["url"], "http://h/2")
 
+    def test_publication_dates_are_captured(self) -> None:
+        """«متى قيل هذا» نصفُ الخبر، وكان يُرمى."""
+        rss = ('<rss version="2.0"><channel><item><title>t</title>'
+               "<link>http://h/1</link>"
+               "<pubDate>Mon, 01 Sep 2025 10:00:00 +0000</pubDate>"
+               "</item></channel></rss>")
+        atom = ('<feed xmlns="http://www.w3.org/2005/Atom"><entry><title>t</title>'
+                '<link href="http://h/2"/>'
+                "<published>2023-04-15T08:00:00Z</published></entry></feed>")
+        import time as _t
+
+        got = sources.parse_feed(rss)[0]["published"]
+        self.assertEqual(_t.strftime("%Y-%m", _t.gmtime(got)), "2025-09")
+        got = sources.parse_feed(atom)[0]["published"]
+        self.assertEqual(_t.strftime("%Y-%m", _t.gmtime(got)), "2023-04")
+
+    def test_a_bad_date_is_none_not_a_crash(self) -> None:
+        for raw in ("", "  ", "yesterday", "2026-13-45", None):
+            self.assertIsNone(sources._parse_date(raw))
+        rss = ('<rss version="2.0"><channel><item><title>t</title>'
+               "<link>http://h/1</link><pubDate>لا تاريخ</pubDate>"
+               "</item></channel></rss>")
+        self.assertIsNone(sources.parse_feed(rss)[0]["published"])
+
     def test_malformed_feed_returns_empty(self) -> None:
         self.assertEqual(sources.parse_feed("<not xml"), [])
         self.assertEqual(sources.parse_feed(""), [])
@@ -867,6 +891,63 @@ class TestInsight(unittest.TestCase):
             insight.coverage(self.body, "موضوع", ["ja", "ar", "ko"]))
         self.assertIn("●", text)
         self.assertIn("لم يزرهم بما يكفي", text)
+
+    def _dated(self, lang_: str, term: str, year: int, month: int = 1) -> None:
+        import datetime as _dt
+
+        self.body.remember(title=f"{term} مقال", summary=term, body=term,
+                           lang=lang_, keywords=[term], published=
+                           _dt.datetime(year, month, 1).timestamp())
+
+    def test_temporal_lead_orders_the_worlds(self) -> None:
+        """أطروحة «تصل متأخّراً سنتين» محسوبةً لا مقولة."""
+        self._learn("شيخوخة", {"ja": "高齢化", "ar": "شيخوخة", "en": "ageing"})
+        self._dated("ja", "高齢化", 2019, 3)
+        self._dated("en", "ageing", 2022, 3)
+        self._dated("ar", "شيخوخة", 2025, 3)
+        lead = insight.temporal_lead(self.body, "شيخوخة", ["ja", "en", "ar"])
+        self.assertEqual(lead.earliest, "ja")
+        self.assertAlmostEqual(lead.lag_days("ja"), 0.0)
+        self.assertAlmostEqual(lead.lag_days("en") / 365.25, 3.0, places=1)
+        self.assertAlmostEqual(lead.lag_days("ar") / 365.25, 6.0, places=1)
+
+    def test_lead_uses_publication_not_reading_time(self) -> None:
+        """تاريخ القراءة يقيس ترتيب تجواله هو، لا ترتيب العالم."""
+        self._learn("موضوع", {"ja": "話題", "ar": "موضوع"})
+        self._dated("ar", "موضوع", 2024, 1)     # قرأها أوّلاً
+        self._dated("ja", "話題", 2015, 1)       # لكنها نُشرت قبلها بتسع سنين
+        lead = insight.temporal_lead(self.body, "موضوع", ["ja", "ar"])
+        self.assertEqual(lead.earliest, "ja")
+
+    def test_undated_memories_never_enter_the_comparison(self) -> None:
+        self._learn("موضوع", {"ja": "話題", "ar": "موضوع"})
+        self.body.remember(title="موضوع بلا تاريخ", summary="موضوع",
+                           lang="ar", keywords=["موضوع"])
+        self._dated("ja", "話題", 2020)
+        lead = insight.temporal_lead(self.body, "موضوع", ["ja", "ar"])
+        self.assertNotIn("ar", lead.firsts)
+        self.assertIn("لا يكفي", insight.render_lead(lead))
+
+    def test_echoes_need_real_overlap_not_one_word(self) -> None:
+        """أبسط ربطٍ ممكن وأصدقه: اشتراكٌ فعليّ لا تشابهٌ مُدّعى."""
+        a = self.body.remember(title="أولى", summary="س", lang="ar",
+                               keywords=["كم", "حوسبة", "تشفير"])
+        self.body.remember(title="مشتركة", summary="س", lang="ar",
+                           keywords=["كم", "حوسبة", "خوارزمية"])
+        self.body.remember(title="بعيدة", summary="س", lang="ar",
+                           keywords=["كم", "طبخ", "سفر"])
+        found = insight.echoes(self.body, ["كم", "حوسبة", "تشفير"], "ar", a)
+        titles = [t for _i, t, _l, _n in found]
+        self.assertIn("مشتركة", titles)
+        self.assertNotIn("بعيدة", titles)
+
+    def test_echoes_reach_across_languages(self) -> None:
+        a = self.body.remember(title="عربية", summary="س", lang="ar",
+                               keywords=["quantum", "error"])
+        self.body.remember(title="يابانية", summary="س", lang="ja",
+                           keywords=["quantum", "error", "code"])
+        found = insight.echoes(self.body, ["quantum", "error"], "ar", a)
+        self.assertEqual([(t, lg) for _i, t, lg, _n in found], [("يابانية", "ja")])
 
     def test_no_model_means_no_invented_comparison(self) -> None:
         """بلا نموذج لغوي نعرض الجداول ولا نؤلّف مقارنةً لا نملك أدلّتها."""

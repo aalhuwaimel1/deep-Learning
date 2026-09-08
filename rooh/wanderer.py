@@ -169,7 +169,18 @@ class Wanderer:
             # للورقة: نهضم عنوانها وملخّصها، لا بياناتها الوصفية
             to_digest = (dest.payload or {}).get("content") or text
             digested = self.mind.digest(title, to_digest, page_lang)
+            # متى نُشر الأصل: من الخلاصة مباشرةً، ومن سنة الورقة تقريباً
+            published = (dest.payload or {}).get("published")
+            if published is None and (dest.payload or {}).get("year"):
+                import datetime as _dt
+
+                try:
+                    published = _dt.datetime(int(dest.payload["year"]), 1, 1).timestamp()
+                except (ValueError, OverflowError):
+                    published = None
+
             mem_id = self.body.remember(
+                published=published,
                 title=title, summary=digested["summary"], body=text[:4000],
                 lang=page_lang, kind=("paper" if dest.kind == "paper" else "web"),
                 keywords=digested["keywords"],

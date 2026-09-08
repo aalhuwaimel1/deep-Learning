@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import email.utils
 import json
 import random
 import re
@@ -221,6 +222,27 @@ def translate_term(f: Fetcher, conn: sqlite3.Connection, term: str,
 
 
 # ── RSS / Atom ───────────────────────────────────────────────────────────
+def _parse_date(raw: str) -> Optional[float]:
+    """تاريخ نشرٍ من خلاصة: RFC-822 في RSS و ISO-8601 في Atom.
+
+    نلتقطه لأن «متى قيل هذا» نصفُ الخبر: بدونه لا نعرف أنّ عالَماً لغوياً
+    ناقش الموضوع قبل غيره بسنتين، وهي أثمن ما يعطيه هذا الكائن.
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    try:                                  # RSS: Mon, 01 Sep 2026 10:00:00 +0000
+        return email.utils.parsedate_to_datetime(raw).timestamp()
+    except (TypeError, ValueError):
+        pass
+    try:                                  # Atom: 2026-09-01T10:00:00Z
+        import datetime as _dt
+
+        return _dt.datetime.fromisoformat(raw.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
 def parse_feed(xml_text: str, limit: int = 10) -> list[dict]:
     """يقرأ RSS 2.0 و Atom بنفس الدالة."""
     items: list[dict] = []
@@ -233,15 +255,17 @@ def parse_feed(xml_text: str, limit: int = 10) -> list[dict]:
         tag = item.tag.split("}")[-1]
         if tag not in ("item", "entry"):
             continue
-        title, link = "", ""
+        title, link, when = "", "", None
         for child in item:
             ctag = child.tag.split("}")[-1]
             if ctag == "title" and child.text:
                 title = child.text.strip()
             elif ctag == "link":
                 link = (child.get("href") or child.text or "").strip()
+            elif ctag in ("pubDate", "published", "updated", "date") and child.text:
+                when = when or _parse_date(child.text)
         if link:
-            items.append({"title": title, "url": link})
+            items.append({"title": title, "url": link, "published": when})
         if len(items) >= limit:
             break
     return items
@@ -262,6 +286,7 @@ def feed_destinations(f: Fetcher, sources: dict, lang: str,
         return []
     return [
         Destination(url=it["url"], lang=lang, source=feed.get("name", feed["url"]),
-                    title=it["title"], kind="rss_item")
+                    title=it["title"], kind="rss_item",
+                    payload={"published": it.get("published")})
         for it in parse_feed(resp.text(), limit=limit)
     ]

@@ -67,7 +67,10 @@ CREATE TABLE IF NOT EXISTS memories (
     importance     REAL DEFAULT 0.5,
     created_at     REAL NOT NULL,
     last_recalled  REAL,
-    recall_count   INTEGER DEFAULT 0
+    recall_count   INTEGER DEFAULT 0,
+    -- متى نُشر الأصل (لا متى قرأه هو). للأوراق دقّته سنةٌ واحدة، وللأخبار
+    -- دقيقة. بدونه لا يُعرف أيّ عالَمٍ لغويٍّ سبق غيره، وذلك أثمن ما يعطيه.
+    published      REAL
 );
 CREATE INDEX IF NOT EXISTS idx_mem_created ON memories(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_mem_lang    ON memories(lang);
@@ -192,6 +195,9 @@ class Body:
                          ("mode", "TEXT DEFAULT 'كامل'")):
             if col not in have:
                 self.conn.execute(f"ALTER TABLE journeys ADD COLUMN {col} {ddl}")
+        have_mem = {r[1] for r in self.conn.execute("PRAGMA table_info(memories)")}
+        if "published" not in have_mem:
+            self.conn.execute("ALTER TABLE memories ADD COLUMN published REAL")
         self.conn.commit()
 
     def _ensure_fts(self) -> None:
@@ -288,14 +294,16 @@ class Body:
         importance: float = 0.5,
         journey_id: Optional[int] = None,
         page_id: Optional[int] = None,
+        published: Optional[float] = None,
     ) -> int:
         cur = self.conn.execute(
-            """INSERT INTO memories(journey_id, page_id, kind, lang, title, summary, body,
-                                    keywords, source_url, importance, created_at)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+            """INSERT INTO memories(journey_id, page_id, kind, lang, title, summary,
+                                    body, keywords, source_url, importance,
+                                    created_at, published)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
             (journey_id, page_id, kind, lang, title, summary, body,
              json.dumps(keywords or [], ensure_ascii=False), source_url,
-             importance, time.time()),
+             importance, time.time(), published),
         )
         self.conn.commit()
         return int(cur.lastrowid)

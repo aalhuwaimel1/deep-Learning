@@ -11,7 +11,7 @@ Status: Working draft, revised after a line-by-line audit of every **[CLAIM]** a
 
 This is the first written record of an idea that will be developed for at least five years. It is deliberately written as a research document, not a product brochure, because the discipline of separating *what is built*, *what is measured*, and *what is intended* is the only thing that lets the idea grow without collapsing into vague claims.
 
-The system it describes exists as version 0.1 (about 4,000 lines of Python, standard library only, 112 offline tests). It has **not yet been run on the real internet**. Every number in this document comes from code or from runs against a local mock network. The first real-internet run is the first real experiment.
+The system it describes exists as version 0.1 (about 4,000 lines of Python, standard library only, 119 offline tests). It has **not yet been run on the real internet**. Every number in this document comes from code or from runs against a local mock network. The first real-internet run is the first real experiment.
 
 ---
 
@@ -143,6 +143,10 @@ Novelty falls monotonically as the interest map absorbs the topic's vocabulary, 
 A larger known weakness sits in the same place. CJK segmentation by character bigrams was measured against hand-segmented ground truth: **only 56% of extracted bigrams are real words; 44% are fragments spanning word boundaries** (人工智能 yields 工智, 量子计算机 yields 子计 and 算机). A real segmenter (jieba for Chinese, MeCab/fugashi for Japanese, PyThaiNLP for Thai) would remove that noise. This is the single largest available quality gain for the languages the design cares most about, and it is not yet implemented. The "is this page worth remembering" threshold is derived from script density (0.28 for CJK, 0.50 for Thai-group, 1.00 for the rest) rather than a fixed 400 characters. Languages are a *means*: the purpose is that Rooh can go to any country and take information from its source, not be confined to one language's window. They are not the subject of this research.
 
 **5.4 The lexicon.** One concept under the names its peoples give it, built from Wikipedia interlanguage links — editor-ratified equivalents rather than machine translation, hence precise for terms and proper names. Without it, comparing "الذكاء الاصطناعي" with "人工知能" compares two strings, not two worlds.
+
+**5.4b Temporal lead — the thesis, computed.** Section 2.1 asserts that a topic central in four language-worlds and absent from yours means you reach it a year or two late. `rooh lead <concept>` computes that number: for each language-world, the earliest *publication* date among memories about the concept, and the lag from the earliest world. Publication date — not reading date — is the operative field; reading order measures Rooh's itinerary, not the world's. Feed `pubDate`/Atom `published` and paper publication years were being discarded before this; they are now stored on every memory, and undated memories are excluded from the comparison rather than guessed at.
+
+**5.4c Echoes.** Rooh stored fourteen columns per memory and never related any two of them — a collector with a perfect memory that had never had a thought. `echoes` finds prior memories sharing at least two extracted keywords, across languages as readily as within one. It is the simplest honest relation: actual shared keys, not asserted similarity.
 
 **5.5 Open questions — what connects one journey to the next.** A term encountered but not understood is recorded as a question. Tomorrow it goes out to chase it. A question closes only when a page *centered on* that term is read — mere occurrence is not an answer, and accepting it would let Rooh close questions without learning, which is self-deception written into code. Questions chased too long without answer are dropped: blind insistence is not persistence.
 

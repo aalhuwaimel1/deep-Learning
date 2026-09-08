@@ -163,6 +163,10 @@ def cmd_recall(args: argparse.Namespace) -> int:
             print(f"  مفاتيح: {'، '.join(m.keywords[:8])}")
         if m.source_url:
             print(f"  ← {m.source_url}")
+        if args.echoes:
+            with Body() as b:
+                for _mid, title, lg, n in insight.echoes(b, m.keywords, m.lang, m.id):
+                    print(f"    ↔ [{lg}] {title[:60]}  ({n} مفاتيح مشتركة)")
     return 0
 
 
@@ -495,6 +499,25 @@ def cmd_brief(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_lead(args: argparse.Namespace) -> int:
+    """أي عالَمٍ لغويٍّ سبق غيره إلى موضوعٍ ما، وبكم شهراً."""
+    p = Personality.load()
+    concept = " ".join(args.term)
+    langs = args.lang or sorted(p.languages, key=p.languages.get, reverse=True)[:12]
+    f = Fetcher(respect_robots=True) if args.learn else None
+    with Body() as b:
+        lead = insight.temporal_lead(b, concept, langs, fetcher=f, learn=args.learn)
+        dated = b.conn.execute(
+            "SELECT COUNT(*) FROM memories WHERE published IS NOT NULL").fetchone()[0]
+        total = b.conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
+    print(insight.render_lead(lead))
+    if len(lead.firsts) < 2:
+        print(f"\n(بتواريخ نشرٍ معروفة: {dated} من {total} ذكرى. الأخبار "
+              f"والأوراق تحمل تواريخ؛ صفحات الويب العامّة لا تحملها غالباً.)")
+        return 1
+    return 0
+
+
 def cmd_people(args: argparse.Namespace) -> int:
     """من قابله في قراءته — أسماء الباحثين والمؤلّفين، وكم تكرّر كلٌّ منهم.
 
@@ -717,6 +740,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("recall", help="تسأله عمّا يذكر")
     p.add_argument("query")
     p.add_argument("-n", "--limit", type=int, default=8)
+    p.add_argument("--echoes", action="store_true",
+                   help="يعرض ما يتّصل بكل ذكرى من ذكرياته الأخرى")
     p.set_defaults(fn=cmd_recall)
 
     p = sub.add_parser("recent", help="آخر ما التقطه")
@@ -783,6 +808,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--keep", action="store_true",
                    help="لا يحرّك العلامة، فتراها ثانيةً في المرّة القادمة")
     p.set_defaults(fn=cmd_brief)
+
+    p = sub.add_parser("lead", help="أيّ لسانٍ سبق غيره إلى موضوع، وبكم")
+    p.add_argument("term", nargs="+")
+    p.add_argument("--lang", action="append")
+    p.add_argument("--learn", action="store_true")
+    p.set_defaults(fn=cmd_lead)
 
     p = sub.add_parser("people", help="من قابله في قراءته")
     p.add_argument("-n", "--limit", type=int, default=12)
