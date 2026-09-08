@@ -11,7 +11,7 @@ Status: Working draft, revised after a line-by-line audit of every **[CLAIM]** a
 
 This is the first written record of an idea that will be developed for at least five years. It is deliberately written as a research document, not a product brochure, because the discipline of separating *what is built*, *what is measured*, and *what is intended* is the only thing that lets the idea grow without collapsing into vague claims.
 
-The system it describes exists as version 0.1 (about 4,000 lines of Python, standard library only, 119 offline tests). It has **not yet been run on the real internet**. Every number in this document comes from code or from runs against a local mock network. The first real-internet run is the first real experiment.
+The system it describes exists as version 0.1 (about 4,000 lines of Python, standard library only, 131 offline tests). It has **not yet been run on the real internet**. Every number in this document comes from code or from runs against a local mock network. The first real-internet run is the first real experiment.
 
 ---
 
@@ -145,6 +145,8 @@ A larger known weakness sits in the same place. CJK segmentation by character bi
 **5.4 The lexicon.** One concept under the names its peoples give it, built from Wikipedia interlanguage links — editor-ratified equivalents rather than machine translation, hence precise for terms and proper names. Without it, comparing "الذكاء الاصطناعي" with "人工知能" compares two strings, not two worlds.
 
 **5.4b Temporal lead — the thesis, computed.** Section 2.1 asserts that a topic central in four language-worlds and absent from yours means you reach it a year or two late. `rooh lead <concept>` computes that number: for each language-world, the earliest *publication* date among memories about the concept, and the lag from the earliest world. Publication date — not reading date — is the operative field; reading order measures Rooh's itinerary, not the world's. Feed `pubDate`/Atom `published` and paper publication years were being discarded before this; they are now stored on every memory, and undated memories are excluded from the comparison rather than guessed at.
+
+**5.3b Trends.** `rooh trend` reports what is gaining share *within its own language*, never raw counts. A week in which Rooh happened to read more Japanese would otherwise make every Japanese term look like it was accelerating — measuring its itinerary instead of the world, the same error §5.6 guards against for coverage. Normalising by per-language volume in each window removes it: in a test where raw counts doubled (2→4) while Japanese reading fell from 20 memories to 5, the share rose 10%→80%, and the share is what is reported.
 
 **5.4c Echoes.** Rooh stored fourteen columns per memory and never related any two of them — a collector with a perfect memory that had never had a thought. `echoes` finds prior memories sharing at least two extracted keywords, across languages as readily as within one. It is the simplest honest relation: actual shared keys, not asserted similarity.
 
@@ -344,7 +346,7 @@ Bank accounts are in the principal's name; every financial action Rooh takes is 
 ## 11. Immediate next steps
 
 1. ~~Implement `rooh snapshot` and the two baselines.~~ **Done.** `rooh snapshot` (16 fields, cumulative + delta) and `--mode كامل|جِدّة|عشوائي`; 103 offline tests. Building it surfaced two defects that would have destroyed the experiment: the `lexicon` table was created lazily on first translation, so the very first snapshot of every fresh instance crashed; and no field measured learning, only movement.
-2. Run `rooh sources --check`, then start all three instances on the real internet, each in its own `ROOH_HOME`, with `rooh snapshot` on a daily cron. Week 1 is warm-up by design.
+2. ~~Run `rooh sources --check`, then start all three instances.~~ **Tooling done.** `scripts/rooh-cycle.sh` runs one hourly cycle under cron — wander, then once per calendar day a snapshot and a delivered message — with an atomic lock, per-command timeouts, log rotation, and day-stamp recovery. Unattended operation added one requirement that was not in this plan and should have been: **health must be reported, because silence reads as calm.** An empty daily message means "found nothing new"; if the agent died on day two, that reading is a lie. Every message now leads with the failure streak, hours since the last productive journey, and the last error. Run the three instances, each in its own `ROOH_HOME`, and read the first three days' messages before walking away.
 3. Verify every reference marked *[verify]*; read Oudeyer & Kaplan (2007, typology) and Colas et al. (2022) in full. The positioning in §6.1 depends on those two being read, not cited.
 4. Write paper 1 around the numbers that come out — not before.
 

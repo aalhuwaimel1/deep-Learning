@@ -8,7 +8,7 @@ import sys
 import time
 from typing import Optional
 
-from . import config, insight, languages, research, sources
+from . import config, insight, languages, notify, research, sources, trends
 from .body import Body
 from .drives import MODES, Drives
 from .mind import LLM, Mind, describe_backend
@@ -117,6 +117,12 @@ def cmd_wander(args: argparse.Namespace) -> int:
         except KeyboardInterrupt:
             print("\nقُطعت الرحلة. ما حُفظ حتى الآن باقٍ في الجسد.")
             return 130
+        except Exception as e:                    # رحلةٌ سقطت: نسجّل ولا نبتلع
+            _record_health(body, ok=False, why=f"{type(e).__name__}: {e}")
+            raise
+        # صحّته تُقاس بما عاد به لا بأنه خرج: رحلةٌ بلا صيدٍ إخفاق.
+        _record_health(body, ok=rep.stored > 0,
+                       why="" if rep.stored else "عاد بلا شيء")
     print("\n" + "─" * 50)
     print(rep.journal)
     print("─" * 50)
@@ -558,6 +564,172 @@ def cmd_people(args: argparse.Namespace) -> int:
     return 0
 
 
+def _record_health(b: Body, ok: bool, why: str = "") -> None:
+    """يسجّل حال آخر رحلة. بدونه تعود بعد أسبوعين إلى رسائل فارغة
+    لا تدري أهو صامتٌ لأنه لم يجد، أم لأنه ميّت منذ اليوم الثاني."""
+    now = time.time()
+    if ok:
+        b.set_meta("last_ok", str(now))
+        b.set_meta("fail_streak", "0")
+        b.set_meta("last_error", "")
+    else:
+        streak = int(b.get_meta("fail_streak", "0") or 0) + 1
+        b.set_meta("fail_streak", str(streak))
+        b.set_meta("last_error", f"{time.strftime('%Y-%m-%d %H:%M')} — {why}"[:300])
+
+
+def _health_warning(b: Body) -> Optional[str]:
+    """سطرٌ يتصدّر رسالة اليوم إن كان في الأمر خلل. الصمت ليس خبراً ساراً."""
+    streak = int(b.get_meta("fail_streak", "0") or 0)
+    last_ok = float(b.get_meta("last_ok", "0") or 0)
+    hours = (time.time() - last_ok) / 3600 if last_ok else None
+    err = b.get_meta("last_error", "")
+
+    lines: list[str] = []
+    if streak >= 3:
+        lines.append(f"⚠️ أخفقت {streak} رحلة متتالية.")
+    if hours is not None and hours > 36:
+        lines.append(f"⚠️ آخر رحلةٍ مثمرة قبل {hours/24:.1f} يوم.")
+    elif last_ok == 0:
+        lines.append("⚠️ لم تنجح رحلةٌ واحدة بعد.")
+    if lines and err:
+        lines.append(f"   آخر خطأ: {err}")
+    if lines:
+        lines.append("   افحص: rooh sources --check")
+
+    try:
+        size = config.db_path().stat().st_size / 1e9
+        if size > 20:
+            lines.append(f"⚠️ حجم الجسد {size:.1f} غ.ب — راجع المساحة.")
+    except OSError:
+        pass
+    return "\n".join(lines) if lines else None
+
+
+def _compose_daily(b: Body, p: Personality, since: float, limit: int = 30) -> str:
+    """يبني رسالة اليوم من كل ما يعرفه. نصٌّ عاديّ يُقرأ على جوّال."""
+    langs = sorted(p.languages, key=p.languages.get, reverse=True)[:12]
+    out: list[str] = []
+
+    warning = _health_warning(b)
+    if warning:
+        out.append(warning)
+        out.append("")
+
+    entries = b.read_journal(1)
+    if entries and entries[0][1]:
+        out.append(entries[0][1].strip())
+        out.append("")
+
+    fresh = b.conn.execute(
+        """SELECT title, lang, summary, source_url, kind FROM memories
+           WHERE created_at > ? ORDER BY importance DESC, created_at DESC LIMIT ?""",
+        (since, limit)).fetchall()
+    if fresh:
+        by_lang: dict[str, list] = {}
+        for r in fresh:
+            by_lang.setdefault(r["lang"], []).append(r)
+        out.append(f"قرأت {len(fresh)} شيئاً في {len(by_lang)} لسان:")
+        for lg, rows in sorted(by_lang.items(), key=lambda kv: -len(kv[1]))[:6]:
+            out.append(f"\n【{languages.arabic_name(lg)}】")
+            for r in rows[:3]:
+                mark = "◆" if r["kind"] == "paper" else "•"
+                out.append(f"{mark} {r['title'][:80]}")
+                if r["source_url"]:
+                    out.append(f"  {r['source_url']}")
+    else:
+        out.append("لم أقرأ جديداً منذ آخر مرّة.")
+
+    hot = trends.trends(b, days=7, limit=5)
+    if hot:
+        out.append("\n\n🔥 ما يسخن هذا الأسبوع")
+        out.append(trends.render(hot))
+        # ولأسخنها: من سبق من؟
+        top = hot[0]
+        lead = insight.temporal_lead(b, top.term, langs)
+        if len(lead.firsts) >= 2 and lead.earliest:
+            worst = max(lead.firsts, key=lambda l: lead.firsts[l][0])
+            months = (lead.lag_days(worst) or 0) / 30.4
+            if months >= 3:
+                out.append(f"  ↳ وفيه: {languages.arabic_name(lead.earliest)} سبقت "
+                           f"{languages.arabic_name(worst)} بـ{months:.0f} شهراً.")
+
+    found = insight.gaps(b, langs, limit=3)
+    if found:
+        out.append("\n\n★ فجوات لغتك")
+        for g in found:
+            miss = "، ".join(languages.arabic_name(l) for l in g.missing)
+            out.append(f"  • {g.concept} — يصمت عنه: {miss}")
+
+    met = b.people(limit=4, since=since)
+    if met:
+        out.append("\n\n👤 قابلت لأوّل مرّة")
+        for r in met:
+            venue = f" — {r['venues'][0]}" if r["venues"] else ""
+            out.append(f"  • [{r['lang']}] {r['name']}{venue}")
+
+    pending = b.open_questions(limit=4)
+    if pending:
+        out.append("\n\n؟ ما زال يشغلني")
+        for _q, term, lg, _a in pending:
+            out.append(f"  • [{lg}] {term}")
+
+    return "\n".join(out)
+
+
+def cmd_daily(args: argparse.Namespace) -> int:
+    """رسالة اليوم: يبادر هو، ولا تسأله أنت."""
+    p = Personality.load()
+    with Body() as b:
+        since = float(b.get_meta("last_daily", "0") or 0)
+        text = _compose_daily(b, p, since, limit=args.limit)
+        if not args.keep:
+            b.set_meta("last_daily", str(time.time()))
+
+    when = time.strftime("%Y-%m-%d", time.localtime())
+    subject = f"{p.name} — {when}"
+    if args.print:
+        print(f"{subject}\n\n{text}")
+        return 0
+    result = notify.send(text, subject=subject)
+    print(f"الملف: {result['file']}")
+    print(f"تلغرام: {result['telegram']}")
+    return 1 if result.get("error") and not notify.configured() is False else 0
+
+
+def cmd_notify(args: argparse.Namespace) -> int:
+    """إعداد قناة التوصيل واختبارها."""
+    if args.setup or not (args.test or args.message):
+        print(notify.SETUP)
+        print(f"\nالحالة الآن: "
+              f"{'مُهيّأ ✓' if notify.configured() else 'غير مُهيّأ — الملفّ فقط'}")
+        print(f"صندوق الصادر: {notify.outbox()}")
+        return 0
+    text = " ".join(args.message) if args.message else (
+        "تجربة اتّصال من رُوح. إن وصلتك هذه فالقناة تعمل.")
+    result = notify.send(text, subject="رُوح — تجربة")
+    print(f"الملف  : {result['file']}")
+    print(f"تلغرام : {result['telegram']}")
+    return 0 if not result.get("error") else 1
+
+
+def cmd_trend(args: argparse.Namespace) -> int:
+    """ما ارتفعت حصّته داخل لسانه — لا ما كثر عدده."""
+    with Body() as b:
+        hot = trends.trends(b, days=args.days, limit=args.limit)
+        if not hot:
+            total = b.conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
+        print(trends.render(hot))
+        if not hot:
+            print(f"\n(في جسده {total} ذكرى. التسارع يحتاج نافذتين متتاليتين "
+                  f"من {args.days} يوماً فيهما قراءةٌ كافية.)")
+            return 1
+        for t in hot[:3]:
+            for title in t.titles[:1]:
+                print(f"      {title[:70]}")
+    return 0
+
+
 def cmd_snapshot(args: argparse.Namespace) -> int:
     """لقطة يومية للقياس — سطر JSON واحد يُلحق بـ snapshots.jsonl.
 
@@ -822,6 +994,23 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--across", action="store_true",
                    help="من قابلهم بأكثر من لسان")
     p.set_defaults(fn=cmd_people)
+
+    p = sub.add_parser("daily", help="رسالة اليوم — يبادر هو ولا تسأله أنت")
+    p.add_argument("-n", "--limit", type=int, default=30)
+    p.add_argument("--print", action="store_true", help="يطبعها بدل أن يرسلها")
+    p.add_argument("--keep", action="store_true", help="لا يحرّك علامة اليوم")
+    p.set_defaults(fn=cmd_daily)
+
+    p = sub.add_parser("notify", help="إعداد قناة التوصيل واختبارها")
+    p.add_argument("--setup", action="store_true", help="يشرح خطوات تلغرام")
+    p.add_argument("--test", action="store_true", help="يرسل رسالة تجربة")
+    p.add_argument("message", nargs="*", help="نصٌّ ترسله بنفسك")
+    p.set_defaults(fn=cmd_notify)
+
+    p = sub.add_parser("trend", help="ما يسخن الآن (بالحصّة لا بالعدد)")
+    p.add_argument("--days", type=int, default=7, help="طول النافذة بالأيام")
+    p.add_argument("-n", "--limit", type=int, default=8)
+    p.set_defaults(fn=cmd_trend)
 
     p = sub.add_parser("snapshot", help="لقطة يومية للقياس (JSONL)")
     p.add_argument("--json", action="store_true", help="سطر JSON فقط")

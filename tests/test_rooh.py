@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import http.server
+import json
+import os
+import time
 import socketserver
 import tempfile
 import threading
@@ -14,6 +17,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from rooh import insight, lang, languages, research, senses, sources   # noqa: E402
+from rooh import notify, trends                # noqa: E402
 from rooh.drives import Drives                 # noqa: E402
 from rooh.body import Body                       # noqa: E402
 from rooh.mind import Mind                       # noqa: E402
@@ -957,6 +961,153 @@ class TestInsight(unittest.TestCase):
         cov = insight.coverage(self.body, "موضوع", ["ja", "zh"])
         self.assertIsNone(insight.synthesize(Mind(Personality.default(),
                                                   use_llm=False), cov))
+
+
+# ── التسارع ──────────────────────────────────────────────────────────────
+class TestTrends(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.body = Body(Path(self.tmp.name) / "b.db")
+        self.now = 1_800_000_000.0
+
+    def tearDown(self) -> None:
+        self.body.close()
+        self.tmp.cleanup()
+
+    def _add(self, lang_: str, kws: list[str], days_ago: float) -> None:
+        self.body.conn.execute(
+            """INSERT INTO memories(kind, lang, title, summary, body, keywords,
+                                    importance, created_at)
+               VALUES('web',?,?,'s','s',?,0.5,?)""",
+            (lang_, kws[0] if kws else "ع",
+             json.dumps(kws, ensure_ascii=False), self.now - days_ago * 86400))
+
+    def test_share_not_raw_count(self) -> None:
+        """الفخّ: أسبوعٌ زار فيه لساناً أكثر يجعل كل شيءٍ فيه «متسارعاً».
+        نقيس الحصّة داخل اللسان، فلا يقيس تجوالَه هو بدل العالم."""
+        for i in range(20):                      # الأسبوع السابق: قراءةٌ كثيفة
+            self._add("ja", ["量子"] if i < 2 else ["其他"], 10)
+        for i in range(5):                       # والحالي: قراءةٌ أقلّ
+            self._add("ja", ["量子"] if i < 4 else ["其他"], 2)
+        self.body.conn.commit()
+        hot = trends.trends(self.body, days=7, now=self.now)
+        found = next(t for t in hot if t.term == "量子")
+        self.assertAlmostEqual(found.share_before, 0.10, places=2)
+        self.assertAlmostEqual(found.share_now, 0.80, places=2)
+        self.assertGreater(found.ratio, 5)
+        self.assertEqual((found.before, found.now), (2, 4))   # العدد الخام ٢×
+
+    def test_reading_more_does_not_fake_a_trend(self) -> None:
+        """ضِعف القراءة بنفس النِّسَب ليس تسارعاً."""
+        for i in range(10):
+            self._add("ru", ["кубит"] if i < 5 else ["другое"], 10)
+        for i in range(20):
+            self._add("ru", ["кубит"] if i < 10 else ["другое"], 2)
+        self.body.conn.commit()
+        self.assertEqual([t for t in trends.trends(self.body, days=7, now=self.now)
+                          if t.term == "кубит"], [])
+
+    def test_tiny_samples_are_not_news(self) -> None:
+        self._add("ar", ["نادر"], 2)
+        self._add("ar", ["نادر"], 2)
+        self.body.conn.commit()
+        self.assertEqual(trends.trends(self.body, days=7, now=self.now), [])
+
+    def test_empty_body_says_so_quietly(self) -> None:
+        self.assertEqual(trends.trends(self.body, days=7, now=self.now), [])
+        self.assertIn("لا شيء", trends.render([]))
+
+
+# ── الصحّة تحت التشغيل غير المراقَب ──────────────────────────────────────
+class TestHealth(unittest.TestCase):
+    """تعمل أسبوعين بلا أحد. الصمت يجب ألّا يُقرأ اطمئناناً."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.body = Body(Path(self.tmp.name) / "b.db")
+
+    def tearDown(self) -> None:
+        self.body.close()
+        self.tmp.cleanup()
+
+    def test_a_virgin_body_warns_rather_than_reassures(self) -> None:
+        from rooh.cli import _health_warning
+
+        self.assertIn("لم تنجح رحلةٌ واحدة", _health_warning(self.body) or "")
+
+    def test_streak_then_recovery(self) -> None:
+        from rooh.cli import _health_warning, _record_health
+
+        for _ in range(3):
+            _record_health(self.body, ok=False, why="الشبكة مقطوعة")
+        warn = _health_warning(self.body) or ""
+        self.assertIn("أخفقت 3", warn)
+        self.assertIn("الشبكة مقطوعة", warn)
+        _record_health(self.body, ok=True)
+        self.assertIsNone(_health_warning(self.body))
+
+    def test_a_long_silence_is_reported(self) -> None:
+        from rooh.cli import _health_warning, _record_health
+
+        _record_health(self.body, ok=True)
+        self.body.set_meta("last_ok", str(time.time() - 5 * 86400))
+        self.assertIn("5.0 يوم", _health_warning(self.body) or "")
+
+    def test_the_daily_message_leads_with_the_warning(self) -> None:
+        """رسالةٌ فارغة تُقرأ «لم يجد جديداً»؛ ورسالةٌ صامتة عن عطبٍ تكذب."""
+        from rooh.cli import _compose_daily, _record_health
+
+        for _ in range(4):
+            _record_health(self.body, ok=False, why="تعذّر الوصول")
+        text = _compose_daily(self.body, Personality.default(), 0.0)
+        self.assertTrue(text.startswith("⚠️"), text[:80])
+        self.assertIn("أخفقت 4", text)
+
+
+# ── التوصيل ──────────────────────────────────────────────────────────────
+class TestNotify(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self._old = os.environ.get("ROOH_HOME")
+        os.environ["ROOH_HOME"] = self.tmp.name
+
+    def tearDown(self) -> None:
+        if self._old is None:
+            os.environ.pop("ROOH_HOME", None)
+        else:
+            os.environ["ROOH_HOME"] = self._old
+        self.tmp.cleanup()
+
+    def test_a_copy_is_always_written(self) -> None:
+        """الملفّ ليس احتياطياً بل سجلّاً: تعود بعد أسبوعين فتجد كل رسالة."""
+        r = notify.send("متن الرسالة", subject="عنوان")
+        self.assertIsNotNone(r["file"])
+        text = Path(r["file"]).read_text(encoding="utf-8")
+        self.assertIn("عنوان", text)
+        self.assertIn("متن الرسالة", text)
+
+    def test_split_respects_line_boundaries(self) -> None:
+        long = "\n".join(f"سطر {i} " + "ن" * 80 for i in range(200))
+        parts = notify._split(long)
+        self.assertGreater(len(parts), 1)
+        self.assertTrue(all(len(p) <= notify.CHUNK for p in parts))
+        self.assertEqual("".join(parts), long)
+
+    def test_a_single_huge_line_still_splits(self) -> None:
+        parts = notify._split("ن" * (notify.CHUNK * 3))
+        self.assertTrue(all(len(p) <= notify.CHUNK for p in parts))
+
+    def test_sending_never_raises(self) -> None:
+        """يُستدعى من حلقةٍ بلا مراقبة؛ سقوطها لأجل إشعارٍ خسارةٌ بلا معنى."""
+        os.environ["ROOH_TELEGRAM_TOKEN"] = "0:غير-صالح"
+        os.environ["ROOH_TELEGRAM_CHAT"] = "0"
+        try:
+            r = notify.send("نص")
+            self.assertIsNotNone(r["file"])       # الملفّ كُتب رغم فشل الإرسال
+            self.assertIn("أخفقت", r["telegram"])
+        finally:
+            os.environ.pop("ROOH_TELEGRAM_TOKEN", None)
+            os.environ.pop("ROOH_TELEGRAM_CHAT", None)
 
 
 # ── الرحلة كاملة ─────────────────────────────────────────────────────────
