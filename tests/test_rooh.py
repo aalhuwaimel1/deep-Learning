@@ -5,10 +5,12 @@ from __future__ import annotations
 import http.server
 import json
 import os
-import time
+import random
 import socketserver
+import time
 import tempfile
 import threading
+from typing import Optional
 import unittest
 from pathlib import Path
 
@@ -1120,7 +1122,12 @@ class TestJourney(unittest.TestCase):
         self.body.close()
         self.tmp.cleanup()
 
-    def _wanderer(self, base: str, **kw) -> Wanderer:
+    #: بذرةٌ ثابتة. بلا تثبيتها كانت خمسة اختباراتٍ تدّعي عدداً بالضبط
+    #: بينما اختيار الوجهة عشوائي، فتسقط نحو مرّةٍ في العشر. والاختبارُ
+    #: المتقطّع أسوأ من الساقط: يُعلّمك تجاهُلَ الأحمر.
+    SEED = 20260908
+
+    def _wanderer(self, base: str, seed: Optional[int] = None, **kw) -> Wanderer:
         p = Personality.default()
         p.curiosity = 0.0            # يبقى في شبكتنا المحلية، لا يخرج لويكيبيديا
         p.research_bias = 0.0        # الأبحاث لها اختبارها الخاص
@@ -1132,7 +1139,8 @@ class TestJourney(unittest.TestCase):
                          for lg in PAGES}}
         return Wanderer(self.body, p, Mind(p, use_llm=False),
                         fetcher=Fetcher(delay=0.0, respect_robots=False),
-                        source_map=src)
+                        source_map=src,
+                        rng=random.Random(self.SEED if seed is None else seed))
 
     def test_full_journey(self) -> None:
         import os
@@ -1357,12 +1365,19 @@ class TestJourney(unittest.TestCase):
         self.assertEqual(w.drives.mood(), "ضجِر")
 
     def test_boredom_changes_where_he_goes(self) -> None:
-        """المزاج ليس زينة: الضجر يبدّل الوجهة فعلاً."""
-        with LocalNet() as base:
-            for _ in range(4):
-                w = self._wanderer(base)
-                rep = w.journey(pages=4)
-        self.assertIn("غريب", rep.urges)
+        """المزاج ليس زينة: الضجر يبدّل الوجهة فعلاً.
+
+        نجرّبها ببذورٍ مختلفة: خاصيّةٌ سلوكية تصحّ ببذرةٍ واحدة قد تكون
+        حظّاً، والبذرة الثابتة تُخفي ذلك لا تثبته.
+        """
+        for seed in (1, 7, 99, 20260908):
+            with self.subTest(seed=seed):
+                self.tearDown()
+                self.setUp()
+                with LocalNet() as base:
+                    for _ in range(4):
+                        rep = self._wanderer(base, seed=seed).journey(pages=4)
+                self.assertIn("غريب", rep.urges)
 
     def test_mood_is_derived_not_drawn_by_lot(self) -> None:
         with LocalNet() as base:
