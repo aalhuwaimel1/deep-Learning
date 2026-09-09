@@ -26,6 +26,20 @@ class FetchError(Exception):
     """فشل جلب صفحة — سبب متوقّع، لا يوقف الرحلة."""
 
 
+class _Verdict:
+    """حكمٌ على أصلٍ كامل حين لا يوجد محلّل robots.txt نسأله."""
+
+    def __init__(self, name: str):
+        self.name = name
+
+    def __repr__(self) -> str:
+        return f"<{self.name}>"
+
+
+ALLOW_ALL = _Verdict("لا robots.txt")      # ٤٠٤: لا ملفّ ⇒ لا قيد
+DENY_ALL = _Verdict("تعذّر التحقّق")        # ٤٠٣/٥xx/شبكة ⇒ نمنع
+
+
 @dataclass
 class Response:
     url: str
@@ -81,28 +95,45 @@ class Fetcher:
         self._last_hit[host] = time.monotonic()
 
     def allowed(self, url: str) -> bool:
+        """هل يأذن robots.txt بهذا المسار؟
+
+        حين يتعذّر جلب robots.txt نمنع ولا نبيح. كان الكود يفترض الإباحة
+        عند أي إخفاق — وذلك يجعل الضمانة تنهار في اللحظة التي تُحتاج فيها:
+        خادمٌ يردّ 403 على robots ثم يُزار كأنه أذِن. والمعيار (RFC 9309)
+        يفرّق: غيابُ الملفّ (404) إباحةٌ كاملة، أمّا المنعُ من قراءته
+        (401/403) فمنعٌ كامل، وأمّا عطبُ الخادم أو الشبكة فمنعٌ مؤقّت.
+        """
         if not self.respect_robots:
             return True
         parts = urlparse(url)
         origin = f"{parts.scheme}://{parts.netloc}"
         if origin not in self._robots:
             self._robots[origin] = self._load_robots(origin)
-        rp = self._robots[origin]
-        if rp is None:      # لا robots.txt أو تعذّر قراءته ⇒ نفترض السماح
+        verdict = self._robots[origin]
+        if verdict is ALLOW_ALL:        # لا ملفّ أصلاً ⇒ لا قيد
             return True
-        return rp.can_fetch(self.user_agent, url)
+        if verdict is DENY_ALL:         # تعذّر التحقّق ⇒ لا نُقدِم
+            return False
+        return verdict.can_fetch(self.user_agent, url)
 
-    def _load_robots(self, origin: str) -> Optional[urllib.robotparser.RobotFileParser]:
-        rp = urllib.robotparser.RobotFileParser()
+    def _load_robots(self, origin: str):
+        """يعيد المحلّل، أو ALLOW_ALL/DENY_ALL حين لا يوجد محلّل."""
         try:
             req = urllib.request.Request(
                 f"{origin}/robots.txt", headers={"User-Agent": self.user_agent}
             )
             with self._opener.open(req, timeout=min(self.timeout, 10)) as r:
+                rp = urllib.robotparser.RobotFileParser()
                 rp.parse(r.read(200_000).decode("utf-8", errors="replace").splitlines())
-            return rp
+                return rp
+        except urllib.error.HTTPError as e:
+            if e.code in (401, 403):
+                return DENY_ALL          # مُنعنا من قراءته ⇒ مُنعنا من الموقع
+            if 400 <= e.code < 500:
+                return ALLOW_ALL         # 404 وأخواته: لا ملفّ ⇒ لا قيد
+            return DENY_ALL              # 5xx: عطبٌ في الخادم ⇒ لا نُقدِم
         except Exception:
-            return None
+            return DENY_ALL              # شبكةٌ أو مهلة ⇒ لا نُقدِم
 
     # ── الجلب ────────────────────────────────────────────────────────────
     def get(self, url: str, *, accept: str = "text/html,application/xhtml+xml,*/*") -> Response:

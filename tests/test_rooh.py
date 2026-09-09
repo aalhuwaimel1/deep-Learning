@@ -1113,6 +1113,100 @@ class TestCompliance(unittest.TestCase):
         self.assertGreaterEqual(config.DELAY_PER_HOST, 1.0)
 
 
+# ── robots.txt حين لا يمكن التحقّق ───────────────────────────────────────
+ROBOTS_MODE = {"code": 200, "body": "User-agent: *\nDisallow: /private\n"}
+
+
+class _RobotsSite(http.server.BaseHTTPRequestHandler):
+    def do_GET(self) -> None:                      # noqa: N802
+        if self.path == "/robots.txt":
+            code = ROBOTS_MODE["code"]
+            if code != 200:
+                self.send_response(code)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            raw = ROBOTS_MODE["body"].encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+            return
+        raw = b"<html><body><p>page</p></body></html>"
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def log_message(self, *a: object) -> None:
+        pass
+
+
+class _RobotsNet:
+    def __enter__(self) -> str:
+        self.srv = socketserver.TCPServer(("127.0.0.1", 0), _RobotsSite)
+        self.t = threading.Thread(target=self.srv.serve_forever, daemon=True)
+        self.t.start()
+        return f"http://127.0.0.1:{self.srv.server_address[1]}"
+
+    def __exit__(self, *exc: object) -> None:
+        self.srv.shutdown()
+        self.srv.server_close()
+
+
+class TestRobotsFailureModes(unittest.TestCase):
+    """انحدار: كان أي إخفاق في جلب robots.txt يُفترض إباحة.
+
+    فتنهار الضمانة في اللحظة التي تُحتاج فيها: خادمٌ يردّ 403 على
+    robots ثمّ يُزار كأنه أذِن. و RFC 9309 يفرّق بين الحالات.
+    """
+
+    def _allowed(self, base: str, path: str = "/page") -> bool:
+        from rooh.net import Fetcher
+
+        return Fetcher(respect_robots=True).allowed(base + path)
+
+    def test_missing_robots_means_no_restriction(self) -> None:
+        ROBOTS_MODE.update(code=404)
+        with _RobotsNet() as base:
+            self.assertTrue(self._allowed(base))
+
+    def test_forbidden_robots_means_the_whole_site_is_off_limits(self) -> None:
+        for code in (401, 403):
+            ROBOTS_MODE.update(code=code)
+            with _RobotsNet() as base:
+                self.assertFalse(self._allowed(base), f"HTTP {code}")
+
+    def test_server_error_means_do_not_proceed(self) -> None:
+        ROBOTS_MODE.update(code=503)
+        with _RobotsNet() as base:
+            self.assertFalse(self._allowed(base))
+
+    def test_unreachable_host_means_do_not_proceed(self) -> None:
+        from rooh.net import Fetcher
+
+        f = Fetcher(respect_robots=True, timeout=2)
+        self.assertFalse(f.allowed("http://127.0.0.1:1/anything"))
+
+    def test_a_served_robots_is_actually_obeyed(self) -> None:
+        ROBOTS_MODE.update(code=200,
+                           body="User-agent: *\nDisallow: /private\n")
+        with _RobotsNet() as base:
+            self.assertTrue(self._allowed(base, "/public"))
+            self.assertFalse(self._allowed(base, "/private/x"))
+
+    def test_fetching_is_refused_when_robots_could_not_be_read(self) -> None:
+        """المنع يسري على الجلب نفسه، لا على الاستعلام فقط."""
+        from rooh.net import FetchError, Fetcher
+
+        ROBOTS_MODE.update(code=503)
+        with _RobotsNet() as base:
+            with self.assertRaises(FetchError):
+                Fetcher(respect_robots=True).get(base + "/page")
+
+
 # ── الصحّة تحت التشغيل غير المراقَب ──────────────────────────────────────
 class TestHealth(unittest.TestCase):
     """تعمل أسبوعين بلا أحد. الصمت يجب ألّا يُقرأ اطمئناناً."""
