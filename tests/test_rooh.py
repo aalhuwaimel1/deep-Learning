@@ -1020,6 +1020,70 @@ class TestTrends(unittest.TestCase):
         self.assertIn("لا شيء", trends.render([]))
 
 
+# ── الضمانات القانونية ───────────────────────────────────────────────────
+class TestCompliance(unittest.TestCase):
+    """ضماناتٌ تحرس صاحبه من التورّط. تُختبر لأنها تنكسر بصمت."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.body = Body(Path(self.tmp.name) / "b.db")
+
+    def tearDown(self) -> None:
+        self.body.close()
+        self.tmp.cleanup()
+
+    def test_robots_is_respected_by_default(self) -> None:
+        from rooh.net import Fetcher
+
+        self.assertTrue(Personality.default().respect_robots)
+        self.assertTrue(Fetcher().respect_robots)
+
+    def test_disabling_robots_cannot_pass_silently(self) -> None:
+        """إطفاؤه قرارٌ قانونيّ لا إعدادٌ تقني: يتصدّر رسالتك اليومية."""
+        from rooh.cli import _health_warning
+
+        self.body.set_meta("robots_off_since", str(time.time()))
+        warn = _health_warning(self.body) or ""
+        self.assertIn("robots.txt معطّل", warn)
+        self.assertIn("personality.json", warn)
+
+    def test_no_warning_when_robots_is_on(self) -> None:
+        from rooh.cli import _health_warning, _record_health
+
+        _record_health(self.body, ok=True)
+        self.body.set_meta("robots_off_since", "")
+        self.assertIsNone(_health_warning(self.body))
+
+    def test_names_can_be_switched_off_entirely(self) -> None:
+        p = Personality.default()
+        self.assertTrue(p.remember_people)
+        p.limits = {**p.limits, "remember_people": False}
+        self.assertFalse(p.remember_people)
+
+    def test_erasure_is_possible(self) -> None:
+        """حقّ المحو أساسيّ في أي بياناتٍ شخصية."""
+        self.body.meet("باحث أوّل", "ar")
+        self.body.meet("باحث ثانٍ", "ar")
+        self.assertEqual(self.body.forget_people("باحث أوّل"), 1)
+        self.assertEqual([r["name"] for r in self.body.people(9)], ["باحث ثانٍ"])
+        self.assertEqual(self.body.forget_people(), 1)
+        self.assertEqual(self.body.people(9), [])
+
+    def test_the_agent_identifies_itself_honestly(self) -> None:
+        """لا ينتحل متصفّحاً: من يقرأ سجلّ خادمه يعرف من زاره."""
+        from rooh import config
+
+        ua = config.USER_AGENT
+        self.assertIn("rooh", ua.lower())
+        for browser in ("Mozilla", "Chrome", "Safari", "Gecko"):
+            self.assertNotIn(browser, ua)
+
+    def test_requests_to_one_host_are_spaced(self) -> None:
+        from rooh import config
+
+        self.assertGreaterEqual(config.DELAY_PER_HOST, 1.0)
+
+
 # ── الصحّة تحت التشغيل غير المراقَب ──────────────────────────────────────
 class TestHealth(unittest.TestCase):
     """تعمل أسبوعين بلا أحد. الصمت يجب ألّا يُقرأ اطمئناناً."""
@@ -1317,12 +1381,35 @@ class TestJourney(unittest.TestCase):
                 rep = w.journey(pages=1, only_lang="ja")
 
         self.assertEqual(sorted(rep.met), ["Wei Zhang", "田中 太郎"])
+        self.assertTrue(w.p.remember_people)
         names = {r["name"] for r in self.body.people(10)}
         self.assertEqual(names, {"Wei Zhang", "田中 太郎"})
         row = next(r for r in self.body.people(10) if r["name"] == "Wei Zhang")
         self.assertEqual(row["lang"], "ja")
         self.assertEqual(row["venues"], ["日本物理学会誌"])
         self.assertEqual(row["works"][0][1], "https://ja.example/1")
+
+    def test_names_are_not_stored_when_switched_off(self) -> None:
+        """المفتاح ليس زينة: يمنع التسجيل من أصله لا يخفيه."""
+        from unittest.mock import patch
+
+        made = [research.Paper(
+            title="量子誤り訂正の研究", lang="ja", year=2025,
+            abstract="本研究では量子誤り訂正符号の新しい構成法を提案する。"
+                     "従来手法と比較して誤り率が大幅に低減されることを示した。",
+            authors=["田中 太郎"], venue="日本物理学会誌", doi="10.1/x",
+            url="https://ja.example/1", provider="openalex")]
+        with LocalNet() as base:
+            w = self._wanderer(base)
+            w.p.limits = {**w.p.limits, "remember_people": False}
+            w.p.research_bias = 1.0
+            w.p.seed_interests = ["الحوسبة الكمية"]
+            with patch.object(research, "search_papers", return_value=made), \
+                 patch.object(sources, "translate_term", return_value=None):
+                rep = w.journey(pages=1, only_lang="ja")
+        self.assertEqual(rep.met, [])
+        self.assertEqual(self.body.people(9), [])
+        self.assertEqual(self.body.stats()["memories"], 1)   # الورقة نفسها محفوظة
 
     def test_paper_without_abstract_is_skipped(self) -> None:
         """ورقة بعنوان بلا ملخّص ليست معرفة — لا تدخل الجسد."""

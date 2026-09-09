@@ -53,6 +53,9 @@ DEFAULT_PERSONALITY: dict = {
         "respect_robots": True,
         "blocked_hosts": [],
         "blocked_terms": [],
+        # تسجيل أسماء الباحثين (بياناتٌ شخصية، وإن كانت منشورةً للعموم).
+        # اجعلها false فلا يُسجَّل اسمٌ أبداً، ولا يُحفظ في الجسد.
+        "remember_people": True,
     },
 }
 
@@ -124,6 +127,11 @@ class Personality:
     @property
     def respect_robots(self) -> bool:
         return bool(self.limits.get("respect_robots", True))
+
+    @property
+    def remember_people(self) -> bool:
+        """هل يسجّل أسماء من يقرأ لهم؟ بياناتٌ شخصية، فلها مفتاح."""
+        return bool(self.limits.get("remember_people", True))
 
     def is_blocked(self, host: str, text: str = "") -> bool:
         for h in self.limits.get("blocked_hosts", []):

@@ -531,6 +531,10 @@ def cmd_people(args: argparse.Namespace) -> int:
     اسمٍ بعينه في موضوعك، وبأكثر من لسان، خبرٌ لا يعطيكه محرّك بحث.
     """
     with Body() as b:
+        if args.forget_all or args.forget:
+            n = b.forget_people(args.forget)
+            print(f"مُحي {n} سجلّاً." if n else "لا شيء ليُمحى.")
+            return 0
         if args.across:
             rows = b.people_across_languages(limit=args.limit)
             if not rows:
@@ -586,6 +590,10 @@ def _health_warning(b: Body) -> Optional[str]:
     err = b.get_meta("last_error", "")
 
     lines: list[str] = []
+    off = b.get_meta("robots_off_since", "")
+    if off:
+        lines.append("⚠️ robots.txt معطّل في شخصيته — يزور مواضع منعها أصحابها.")
+        lines.append("   أعِده: limits.respect_robots = true في personality.json")
     if streak >= 3:
         lines.append(f"⚠️ أخفقت {streak} رحلة متتالية.")
     if hours is not None and hours > 36:
@@ -993,6 +1001,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--new", action="store_true", help="من قابلهم منذ آخر خلاصة")
     p.add_argument("--across", action="store_true",
                    help="من قابلهم بأكثر من لسان")
+    p.add_argument("--forget", metavar="اسم", default=None,
+                   help="يمحو اسماً بعينه")
+    p.add_argument("--forget-all", action="store_true",
+                   help="يمحو كل الأسماء المسجّلة")
     p.set_defaults(fn=cmd_people)
 
     p = sub.add_parser("daily", help="رسالة اليوم — يبادر هو ولا تسأله أنت")

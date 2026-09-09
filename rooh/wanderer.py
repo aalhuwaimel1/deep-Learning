@@ -90,6 +90,15 @@ class Wanderer:
                                    self.p.persistence)
         mood = self.drives.mood()
 
+        # إطفاء robots قرارٌ قانونيّ لا إعدادٌ تقني. لا يمرّ بصمت أبداً:
+        # يظهر في كل رحلة، ويُختم في الجسد فيتصدّر رسالتك اليومية.
+        if not self.p.respect_robots:
+            self.on_event("unsafe", {"why": "robots.txt معطّل في شخصيته"})
+            self.body.set_meta("robots_off_since",
+                               self.body.get_meta("robots_off_since") or str(time.time()))
+        else:
+            self.body.set_meta("robots_off_since", "")
+
         jid = self.body.start_journey(seeds, mood)
         report = JourneyReport(journey_id=jid, mood=mood)
         self.on_event("wake", {"mood": mood, "seeds": seeds, "budget": budget,
@@ -227,7 +236,7 @@ class Wanderer:
             # من كتب هذه الورقة؟ الأسماء تمرّ عليه في كل ورقة، وكانت
             # تُدفَن في نصّ الذكرى فلا يبقى لسؤال «من صرت تعرف؟» جواب.
             payload = dest.payload or {}
-            for author in payload.get("authors", []):
+            for author in (payload.get("authors", []) if self.p.remember_people else []):
                 if self.body.meet(author, page_lang, venue=payload.get("venue", ""),
                                   work=title, url=dest.url):
                     report.met.append(author)

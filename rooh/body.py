@@ -584,6 +584,19 @@ class Body:
                         "venues": venues, "works": works})
         return out
 
+    def forget_people(self, name: Optional[str] = None) -> int:
+        """يمحو ما سُجّل من أسماء. حقّ المحو أساسيّ في أي بياناتٍ شخصية.
+
+        يمحو الاسم من جدول people فقط؛ نصوص الصفحات المحفوظة قد تذكره كما
+        تذكره الصفحة الأصلية — وذلك نسخةُ قراءةٍ خاصّة لا فهرسُ أشخاص.
+        """
+        if name:
+            cur = self.conn.execute("DELETE FROM people WHERE name=?", (name,))
+        else:
+            cur = self.conn.execute("DELETE FROM people")
+        self.conn.commit()
+        return cur.rowcount
+
     def people_across_languages(self, limit: int = 10) -> list[tuple[str, list[str], int]]:
         """أسماءٌ قابلها بأكثر من لسان — وهذا ما لا يعطيك إياه محرّك بحث."""
         rows = self.conn.execute(
