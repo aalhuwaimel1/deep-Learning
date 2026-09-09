@@ -371,17 +371,46 @@ class TestBody(unittest.TestCase):
             self.assertFalse(self.body.meet(junk, "en"), repr(junk))
         self.assertEqual(self.body.people(10), [])
 
-    def test_same_person_across_languages(self) -> None:
-        """أن يُنشر اسمٌ واحد في عالَمين لغويّين خبرٌ لا يعطيه محرّك بحث."""
+    def test_same_person_needs_an_identifier_not_a_name(self) -> None:
+        """انحدار: كان يقول «نفس الشخص» من تطابق نصّ الاسم وحده.
+
+        و«Wei Zhang» قد يكون خمسين باحثاً؛ فالخلط يصنع صلةً موهومة ثمّ
+        يقدّمها اكتشافاً. الهويّة الثابتة وحدها تُثبت، والاسم يُشير فقط.
+        """
+        ident = "0000-0002-1825-0097"
+        self.body.meet("Wei Zhang", "ja", venue="日本物理学会誌", identity=ident)
+        self.body.meet("Wei Zhang", "zh", venue="中国物理学报", identity=ident)
+        self.body.meet("María López", "es")
+
+        sure = self.body.people_across_languages(certain=True)
+        self.assertEqual(len(sure), 1)
+        name, langs, times, got = sure[0]
+        self.assertEqual((name, langs, times, got), ("Wei Zhang", ["ja", "zh"], 2, ident))
+
+    def test_a_shared_name_is_reported_as_a_name_not_a_person(self) -> None:
+        # باحثان مختلفان يحملان الاسم نفسه، ولا هويّة لأيٍّ منهما
         self.body.meet("Wei Zhang", "ja", venue="日本物理学会誌")
         self.body.meet("Wei Zhang", "zh", venue="中国物理学报")
-        self.body.meet("María López", "es")
-        across = self.body.people_across_languages()
-        self.assertEqual(len(across), 1)
-        name, langs, times = across[0]
-        self.assertEqual(name, "Wei Zhang")
-        self.assertEqual(langs, ["ja", "zh"])
-        self.assertEqual(times, 2)
+
+        self.assertEqual(self.body.people_across_languages(certain=True), [],
+                         "ادّعى «نفس الشخص» بلا هويّة")
+        maybe = self.body.people_across_languages(certain=False)
+        self.assertEqual([m[0] for m in maybe], ["Wei Zhang"])
+        self.assertEqual(maybe[0][3], "")          # بلا هويّة، وهذا مصرَّحٌ به
+
+    def test_identity_and_affiliation_are_kept(self) -> None:
+        """«المعرفة مربوطة بأشخاص»: الاسم وحده لا يكفي لمعرفة من هو."""
+        self.body.meet("田中 太郎", "ja", venue="日本物理学会誌",
+                       identity="A5023", institution="University of Tokyo",
+                       country="JP", topics=["量子", "誤り訂正"])
+        self.body.meet("田中 太郎", "ja", venue="応用物理",
+                       institution="RIKEN", country="JP", topics=["超伝導"])
+        r = self.body.people(1)[0]
+        self.assertEqual(r["identity"], "A5023")   # لا تُمحى بتحديثٍ لا يحملها
+        self.assertEqual(r["institutions"], ["University of Tokyo", "RIKEN"])
+        self.assertEqual(r["countries"], ["JP"])
+        self.assertEqual(r["topics"], ["量子", "誤り訂正", "超伝導"])
+        self.assertEqual(r["venues"], ["日本物理学会誌", "応用物理"])
 
     def test_stats(self) -> None:
         self.body.remember(title="t", summary="s", lang="ja")

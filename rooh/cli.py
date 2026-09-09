@@ -536,14 +536,26 @@ def cmd_people(args: argparse.Namespace) -> int:
             print(f"مُحي {n} سجلّاً." if n else "لا شيء ليُمحى.")
             return 0
         if args.across:
-            rows = b.people_across_languages(limit=args.limit)
-            if not rows:
+            sure = b.people_across_languages(limit=args.limit, certain=True)
+            maybe = b.people_across_languages(limit=args.limit, certain=False)
+            ids = {n for n, _l, _t, _i in sure}
+            maybe = [m for m in maybe if m[0] not in ids]
+            if not (sure or maybe):
                 print("لم يقابل أحداً بأكثر من لسانٍ بعد.")
                 return 1
-            print("أسماء قابلها بأكثر من لسان:\n")
-            for name, langs, times in rows:
-                names = "، ".join(languages.arabic_name(l) for l in langs)
-                print(f"  {name}  —  {names}  ({times} مرّة)")
+            if sure:
+                print("نفس الشخص في أكثر من عالَمٍ لغويّ (بهويّة ثابتة):\n")
+                for name, langs, times, ident in sure:
+                    names = "، ".join(languages.arabic_name(l) for l in langs)
+                    print(f"  ✓ {name}  —  {names}  ({times} مرّة)")
+                    print(f"      هويّته: {ident}")
+            if maybe:
+                print("\nنفس **الاسم** في أكثر من لسان — وقد يكونون أشخاصاً مختلفين:\n")
+                for name, langs, times, _i in maybe:
+                    names = "، ".join(languages.arabic_name(l) for l in langs)
+                    print(f"  ؟ {name}  —  {names}  ({times} مرّة)")
+                print("\n  (لا هويّة ثابتة لهؤلاء. arXiv مثلاً لا يعطي ORCID،")
+                print("   فالاسم كلّ ما لدينا، وهو لا يعرّف أحداً.)")
             return 0
 
         since = None
@@ -559,6 +571,14 @@ def cmd_people(args: argparse.Namespace) -> int:
     for r in rows:
         seen = "مرّة واحدة" if r["times"] == 1 else f"{r['times']} مرّات"
         print(f"\n[{r['lang']}] {r['name']}   ({seen}، آخرها {_when(r['last_seen'])})")
+        if r.get("identity"):
+            print(f"    هويّته: {r['identity']}")
+        if r.get("institutions"):
+            where = "، ".join(i for i in r["institutions"][:2] if i)
+            land = "، ".join(r.get("countries", [])[:2])
+            print(f"    من: {where}" + (f" ({land})" if land else ""))
+        if r.get("topics"):
+            print(f"    مواضيعه: {'، '.join(t for t in r['topics'][:5] if t)}")
         if r["venues"]:
             print(f"    ينشر في: {'، '.join(v for v in r['venues'][:3] if v)}")
         for work, url in r["works"][-2:]:

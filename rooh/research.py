@@ -35,12 +35,34 @@ PROVIDERS = ("openalex", "crossref", "arxiv", "doaj")
 
 
 @dataclass
+class Author:
+    """باحثٌ بمعرّفه لا باسمه وحده.
+
+    الاسم وحده لا يعرّف أحداً: «Wei Zhang» قد يكون خمسين باحثاً. ومن
+    يقارن الأشخاص بنصّ الاسم يخلط بينهم ويظنّ أنه اكتشف صلة. ORCID
+    ومعرّف OpenAlex يحسمان الهويّة حين يتوفّران، وحين لا يتوفّران نقول
+    «نفس الاسم» ولا نقول «نفس الشخص».
+    """
+    name: str
+    orcid: str = ""
+    ext_id: str = ""          # معرّف OpenAlex
+    institution: str = ""
+    country: str = ""
+
+    @property
+    def identity(self) -> str:
+        """المعرّف الذي تُقارن به الهويّة، أو فراغٌ إن كان الاسم كلّ ما لدينا."""
+        return self.orcid or self.ext_id
+
+
+@dataclass
 class Paper:
     title: str
     abstract: str = ""
     lang: str = ""
     year: Optional[int] = None
     authors: list[str] = field(default_factory=list)
+    people: list["Author"] = field(default_factory=list)
     doi: str = ""
     url: str = ""
     venue: str = ""
@@ -92,6 +114,20 @@ def _deinvert(index: Optional[dict]) -> str:
     return " ".join(w for _, w in slots)
 
 
+def _openalex_author(authorship: dict) -> Author:
+    a = authorship.get("author") or {}
+    insts = authorship.get("institutions") or []
+    first = insts[0] if insts else {}
+    countries = authorship.get("countries") or []
+    return Author(
+        name=a.get("display_name", "") or "",
+        orcid=(a.get("orcid") or "").replace("https://orcid.org/", ""),
+        ext_id=(a.get("id") or "").replace("https://openalex.org/", ""),
+        institution=first.get("display_name", "") or "",
+        country=(first.get("country_code") or (countries[0] if countries else "")) or "",
+    )
+
+
 def openalex_search(f: Fetcher, query: str, lang: str = "",
                     limit: int = 5) -> list[Paper]:
     params: dict[str, str] = {"search": query, "per-page": str(min(limit, 50))}
@@ -117,6 +153,7 @@ def openalex_search(f: Fetcher, query: str, lang: str = "",
             year=w.get("publication_year"),
             authors=[a.get("author", {}).get("display_name", "")
                      for a in (w.get("authorships") or [])[:8]],
+            people=[_openalex_author(a) for a in (w.get("authorships") or [])[:8]],
             doi=(w.get("doi") or "").replace("https://doi.org/", ""),
             url=url, venue=src.get("display_name", "") or "",
             provider="openalex", cited_by=w.get("cited_by_count") or 0,
@@ -154,6 +191,11 @@ def crossref_search(f: Fetcher, query: str, lang: str = "",
             lang=it.get("language") or lang, year=year,
             authors=[f"{a.get('given','')} {a.get('family','')}".strip()
                      for a in (it.get("author") or [])[:8]],
+            people=[Author(
+                name=f"{a.get('given','')} {a.get('family','')}".strip(),
+                orcid=(a.get("ORCID") or "").replace("https://orcid.org/", ""),
+                institution=((a.get("affiliation") or [{}])[0]).get("name", "") or "",
+            ) for a in (it.get("author") or [])[:8]],
             doi=it.get("DOI", ""), url=it.get("URL", ""),
             venue=(it.get("container-title") or [""])[0],
             provider="crossref", cited_by=it.get("is-referenced-by-count") or 0,
@@ -186,6 +228,9 @@ def arxiv_search(f: Fetcher, query: str, lang: str = "",
             lang="en", year=int(published) if published.isdigit() else None,
             authors=[(a.findtext(f"{ns}name") or "").strip()
                      for a in entry.findall(f"{ns}author")[:8]],
+            # arXiv لا يعطي معرّفات: أسماءٌ مجرّدة، ونقولها كما هي
+            people=[Author(name=(a.findtext(f"{ns}name") or "").strip())
+                    for a in entry.findall(f"{ns}author")[:8]],
             url=(entry.findtext(f"{ns}id") or ""), venue="arXiv",
             provider="arxiv",
         ))
@@ -217,6 +262,11 @@ def doaj_search(f: Fetcher, query: str, lang: str = "",
                  (bj.get("journal") or {}).get("language") else lang,
             year=int(bj["year"]) if str(bj.get("year", "")).isdigit() else None,
             authors=[a.get("name", "") for a in (bj.get("author") or [])[:8]],
+            people=[Author(name=a.get("name", "") or "",
+                           orcid=(a.get("orcid_id") or "").replace(
+                               "https://orcid.org/", ""),
+                           institution=a.get("affiliation", "") or "")
+                    for a in (bj.get("author") or [])[:8]],
             doi=ident.get("doi", ""), url=links[0] if links else "",
             venue=(bj.get("journal") or {}).get("title", ""),
             provider="doaj",

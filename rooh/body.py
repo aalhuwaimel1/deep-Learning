@@ -100,8 +100,15 @@ CREATE TABLE IF NOT EXISTS people (
     times      INTEGER NOT NULL DEFAULT 1,
     venues     TEXT DEFAULT '[]',
     works      TEXT DEFAULT '[]',
+    -- هويّةٌ ثابتة (ORCID أو معرّف OpenAlex) إن توفّرت. بها وحدها يُقال
+    -- «نفس الشخص»؛ وبالاسم يُقال «نفس الاسم» ولا يُقال أكثر.
+    identity   TEXT DEFAULT '',
+    institutions TEXT DEFAULT '[]',
+    countries  TEXT DEFAULT '[]',
+    topics     TEXT DEFAULT '[]',
     UNIQUE (name, lang)
 );
+CREATE INDEX IF NOT EXISTS idx_people_identity ON people(identity);
 CREATE INDEX IF NOT EXISTS idx_people_times ON people(times DESC);
 
 -- المعجم: المفهوم الواحد بأسماء أهله. يُنشأ هنا لا كسولاً عند أوّل
@@ -198,6 +205,13 @@ class Body:
         have_mem = {r[1] for r in self.conn.execute("PRAGMA table_info(memories)")}
         if "published" not in have_mem:
             self.conn.execute("ALTER TABLE memories ADD COLUMN published REAL")
+        have_ppl = {r[1] for r in self.conn.execute("PRAGMA table_info(people)")}
+        for col, ddl in (("identity", "TEXT DEFAULT ''"),
+                         ("institutions", "TEXT DEFAULT '[]'"),
+                         ("countries", "TEXT DEFAULT '[]'"),
+                         ("topics", "TEXT DEFAULT '[]'")):
+            if col not in have_ppl:
+                self.conn.execute(f"ALTER TABLE people ADD COLUMN {col} {ddl}")
         self.conn.commit()
 
     def _ensure_fts(self) -> None:
@@ -524,39 +538,58 @@ class Body:
     MIN_NAME = 3
 
     def meet(self, name: str, lang: str = "mul", venue: str = "",
-             work: str = "", url: str = "") -> bool:
-        """يسجّل أنه قابل اسماً في قراءته. يعيد True إن كانت أوّل مرّة."""
+             work: str = "", url: str = "", identity: str = "",
+             institution: str = "", country: str = "",
+             topics: Optional[list[str]] = None) -> bool:
+        """يسجّل أنه قابل باحثاً في قراءته. يعيد True إن كانت أوّل مرّة."""
         name = " ".join((name or "").split())
         if len(name) < self.MIN_NAME or name.isdigit():
             return False
         now = time.time()
         row = self.conn.execute(
-            "SELECT id, venues, works FROM people WHERE name=? AND lang=?",
-            (name, lang)).fetchone()
+            "SELECT * FROM people WHERE name=? AND lang=?", (name, lang)).fetchone()
+
+        def merge(raw: str, *values: str) -> str:
+            try:
+                have = json.loads(raw or "[]")
+            except json.JSONDecodeError:
+                have = []
+            for v in values:
+                if v and v not in have:
+                    have.append(v)
+            return json.dumps(have[:8], ensure_ascii=False)
+
         if row is None:
             self.conn.execute(
                 """INSERT INTO people(name, lang, first_seen, last_seen, times,
-                                      venues, works)
-                   VALUES(?,?,?,?,1,?,?)""",
+                                      venues, works, identity, institutions,
+                                      countries, topics)
+                   VALUES(?,?,?,?,1,?,?,?,?,?,?)""",
                 (name, lang, now, now,
-                 json.dumps([venue] if venue else [], ensure_ascii=False),
-                 json.dumps([[work, url]] if work else [], ensure_ascii=False)),
+                 merge("[]", venue),
+                 json.dumps([[work, url]] if work else [], ensure_ascii=False),
+                 identity,
+                 merge("[]", institution), merge("[]", country),
+                 merge("[]", *(topics or []))),
             )
             return True
         try:
-            venues = json.loads(row["venues"] or "[]")
             works = json.loads(row["works"] or "[]")
         except json.JSONDecodeError:
-            venues, works = [], []
-        if venue and venue not in venues:
-            venues.append(venue)
+            works = []
         if work and work not in [w[0] for w in works]:
             works.append([work, url])
         self.conn.execute(
-            """UPDATE people SET last_seen=?, times=times+1, venues=?, works=?
+            """UPDATE people SET last_seen=?, times=times+1, venues=?, works=?,
+                                 identity=?, institutions=?, countries=?, topics=?
                WHERE id=?""",
-            (now, json.dumps(venues[:8], ensure_ascii=False),
-             json.dumps(works[-8:], ensure_ascii=False), row["id"]),
+            (now, merge(row["venues"], venue),
+             json.dumps(works[-8:], ensure_ascii=False),
+             identity or (row["identity"] or ""),
+             merge(row["institutions"], institution),
+             merge(row["countries"], country),
+             merge(row["topics"], *(topics or [])),
+             row["id"]),
         )
         return False
 
@@ -579,9 +612,18 @@ class Body:
                 works = json.loads(r["works"] or "[]")
             except json.JSONDecodeError:
                 venues, works = [], []
+            def load(col: str) -> list:
+                try:
+                    return json.loads(r[col] or "[]")
+                except (json.JSONDecodeError, TypeError, IndexError):
+                    return []
+
             out.append({"name": r["name"], "lang": r["lang"], "times": r["times"],
                         "first_seen": r["first_seen"], "last_seen": r["last_seen"],
-                        "venues": venues, "works": works})
+                        "venues": venues, "works": works,
+                        "identity": (r["identity"] or ""),
+                        "institutions": load("institutions"),
+                        "countries": load("countries"), "topics": load("topics")})
         return out
 
     def forget_people(self, name: Optional[str] = None) -> int:
@@ -597,13 +639,30 @@ class Body:
         self.conn.commit()
         return cur.rowcount
 
-    def people_across_languages(self, limit: int = 10) -> list[tuple[str, list[str], int]]:
-        """أسماءٌ قابلها بأكثر من لسان — وهذا ما لا يعطيك إياه محرّك بحث."""
+    def people_across_languages(self, limit: int = 10, certain: bool = True
+                                ) -> list[tuple[str, list[str], int, str]]:
+        """من يظهر في أكثر من عالَمٍ لغويّ.
+
+        `certain=True` يقارن بالهويّة الثابتة (ORCID أو معرّف OpenAlex)،
+        فالنتيجة «نفس الشخص» حقيقةً. و`certain=False` يقارن بنصّ الاسم،
+        وتلك «نفس الاسم» لا أكثر — و«Wei Zhang» قد يكون خمسين باحثاً،
+        فالخلط بينهما يصنع صلةً موهومة ويقدّمها اكتشافاً.
+        """
+        if certain:
+            rows = self.conn.execute(
+                """SELECT identity, MIN(name) name, GROUP_CONCAT(lang) langs,
+                          SUM(times) t
+                   FROM people WHERE identity != ''
+                   GROUP BY identity HAVING COUNT(DISTINCT lang) > 1
+                   ORDER BY t DESC LIMIT ?""", (limit,)).fetchall()
+            return [(r["name"], sorted(set(r["langs"].split(","))), r["t"],
+                     r["identity"]) for r in rows]
         rows = self.conn.execute(
             """SELECT name, GROUP_CONCAT(lang) langs, SUM(times) t
                FROM people GROUP BY name HAVING COUNT(DISTINCT lang) > 1
                ORDER BY t DESC LIMIT ?""", (limit,)).fetchall()
-        return [(r["name"], sorted(set(r["langs"].split(","))), r["t"]) for r in rows]
+        return [(r["name"], sorted(set(r["langs"].split(","))), r["t"], "")
+                for r in rows]
 
     # ── الدوافع ──────────────────────────────────────────────────────────
     def save_drives(self, raw: str) -> None:

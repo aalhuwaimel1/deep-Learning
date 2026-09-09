@@ -236,11 +236,21 @@ class Wanderer:
             # من كتب هذه الورقة؟ الأسماء تمرّ عليه في كل ورقة، وكانت
             # تُدفَن في نصّ الذكرى فلا يبقى لسؤال «من صرت تعرف؟» جواب.
             payload = dest.payload or {}
-            for author in (payload.get("authors", []) if self.p.remember_people else []):
-                if self.body.meet(author, page_lang, venue=payload.get("venue", ""),
-                                  work=title, url=dest.url):
-                    report.met.append(author)
-                    self.on_event("met", {"name": author, "lang": page_lang})
+            # نفضّل الباحثين بهويّاتهم، ونسقط إلى الأسماء المجرّدة إن لم
+            # يعطها المصدر — اسمٌ بلا هويّة أنفع من لا شيء، ما دمنا لا
+            # ندّعي به أكثر ممّا يحتمل.
+            met_people = payload.get("people") or [
+                research.Author(name=n) for n in payload.get("authors", [])]
+            for person in (met_people if self.p.remember_people else []):
+                if self.body.meet(
+                    person.name, page_lang, venue=payload.get("venue", ""),
+                    work=title, url=dest.url, identity=person.identity,
+                    institution=person.institution, country=person.country,
+                    topics=keywords[:4],
+                ):
+                    report.met.append(person.name)
+                    self.on_event("met", {"name": person.name, "lang": page_lang,
+                                          "where": person.institution})
 
             report.stored += 1
             if urge == "فجوة" and self._gaps:
@@ -517,7 +527,8 @@ class Wanderer:
                             title=pp.title, kind="paper",
                             payload={"text": pp.as_text(),
                                      "content": pp.scholarly_text(),
-                                     "authors": pp.authors, "venue": pp.venue,
+                                     "authors": pp.authors, "people": pp.people,
+                                     "venue": pp.venue,
                                      "year": pp.year, "cited_by": pp.cited_by,
                                      "doi": pp.doi})
                 for pp in papers if pp.url or pp.doi
