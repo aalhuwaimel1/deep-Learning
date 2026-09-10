@@ -1,0 +1,140 @@
+# رُوح يعيش هنا — على أجهزة GitHub، بإنترنتٍ كامل، بلا خادمٍ تستأجره.
+#
+# التشغيل:
+#   ١. Settings → Secrets and variables → Actions → New repository secret
+#        ROOH_TELEGRAM_TOKEN   رمز بوتك
+#        ROOH_TELEGRAM_CHAT    رقم محادثتك
+#      (اختياريان: بدونهما تُحفظ الرسائل في فرع الحالة وتقرأها من الهاتف)
+#   ٢. Actions → رُوح → Run workflow   ← ضغطةٌ واحدة من جوّالك
+#   ٣. بعدها يعمل وحده كل ساعة.
+#
+# المشكلة التي يحلّها هذا الملفّ: أجهزة GitHub تُمحى بعد كل تشغيل، وجسد
+# رُوح يجب أن يبقى. فيُحفظ الجسد في فرعٍ مستقلّ (rooh-body) ويُستعاد في
+# أوّل كل دورة — فتتراكم ذاكرته عبر الأسابيع كما لو كان على خادمٍ ثابت.
+
+name: رُوح
+
+on:
+  schedule:
+    - cron: '17 * * * *'      # كل ساعة (الدقيقة ١٧ لتفادي ذروة الجدولة)
+  workflow_dispatch:           # وزرٌّ يدويّ من الجوّال
+    inputs:
+      pages:
+        description: 'كم صفحة يحفظ في هذه الرحلة'
+        default: '8'
+
+permissions:
+  contents: write              # ليحفظ جسده في فرع الحالة
+
+concurrency:
+  group: rooh-life             # دورةٌ واحدة في آن، لا تتراكب
+  cancel-in-progress: false
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      ROOH_HOME: ${{ github.workspace }}/state
+      ROOH_PAGES: ${{ github.event.inputs.pages || '8' }}
+      ROOH_TELEGRAM_TOKEN: ${{ secrets.ROOH_TELEGRAM_TOKEN }}
+      ROOH_TELEGRAM_CHAT: ${{ secrets.ROOH_TELEGRAM_CHAT }}
+      ROOH_CONTACT: ${{ secrets.ROOH_CONTACT }}
+      STATE_BRANCH: rooh-body
+
+    steps:
+      - name: الكود
+        uses: actions/checkout@v4
+
+      - name: استعادة جسده من فرع الحالة
+        run: |
+          set -e
+          git config user.name  "rooh"
+          git config user.email "rooh@users.noreply.github.com"
+          if git ls-remote --exit-code --heads origin "$STATE_BRANCH" >/dev/null 2>&1; then
+            git fetch origin "$STATE_BRANCH" --depth=1
+            git worktree add /tmp/body "origin/$STATE_BRANCH" --detach
+            mkdir -p "$ROOH_HOME"
+            cp -r /tmp/body/state/. "$ROOH_HOME"/ 2>/dev/null || true
+            echo "استُعيد جسده: $(du -sh "$ROOH_HOME" 2>/dev/null | cut -f1)"
+          else
+            echo "لا فرع حالة بعد — أوّل حياةٍ له."
+            mkdir -p "$ROOH_HOME"
+          fi
+          # نُثبت حجم ما استُعيد. الحفظ لاحقاً يرفض أن يدفع أصغر منه
+          # بكثير: خطوةُ حفظٍ تعمل always() قد تدفع حالةً فارغة إن أخفقت
+          # الاستعادة، فتمحو ذاكرة أسبوعين بضغطة زر.
+          stat -c%s "$ROOH_HOME/body.db" 2>/dev/null > /tmp/restored-size || echo 0 > /tmp/restored-size
+          echo "حجم قاعدته المستعادة: $(cat /tmp/restored-size) بايت"
+
+      - name: بايثون
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: حزمتان اختياريتان
+        run: pip install --quiet stopwordsiso || echo "تعذّر — يعمل بدونها"
+
+      - name: التهيئة أوّل مرّة فقط
+        run: |
+          [ -f "$ROOH_HOME/personality.json" ] || python3 rooh.py init
+
+      - name: فحص المصادر (مرّةً كل يوم)
+        run: |
+          if [ ! -f "$ROOH_HOME/.sources-checked-$(date +%F)" ]; then
+            python3 rooh.py sources --check || true
+            touch "$ROOH_HOME/.sources-checked-$(date +%F)"
+          fi
+
+      - name: الدورة — رحلة، ثمّ لقطةٌ ورسالةٌ مرّةً كل يوم
+        run: bash scripts/rooh-cycle.sh
+
+      - name: ماذا جرى
+        if: always()
+        run: |
+          tail -20 "$ROOH_HOME/cycle.log" 2>/dev/null || echo "لا سجلّ"
+          echo "──────────"
+          python3 rooh.py status 2>/dev/null || true
+
+      - name: حفظ جسده
+        if: always()
+        run: |
+          set -e
+          # حارسٌ ضدّ محو الذاكرة: لا ندفع جسداً أصغر ممّا استعدناه
+          before=$(cat /tmp/restored-size 2>/dev/null || echo 0)
+          after=$(stat -c%s "$ROOH_HOME/body.db" 2>/dev/null || echo 0)
+          if [ "$before" -gt 0 ] && [ "$after" -lt $((before * 8 / 10)) ]; then
+            echo "::error::جسده الآن $after بايت وكان $before — تقلّصٌ مريب."
+            echo "::error::لن يُدفع. فرع $STATE_BRANCH يحتفظ بآخر حالةٍ سليمة."
+            exit 0
+          fi
+          rm -rf /tmp/save && mkdir -p /tmp/save/state
+          cp -r "$ROOH_HOME"/. /tmp/save/state/ 2>/dev/null || true
+          size=$(du -sm /tmp/save 2>/dev/null | cut -f1)
+          echo "حجم جسده: ${size} م.ب"
+          if [ "${size:-0}" -gt 400 ]; then
+            echo "::warning::جسده تجاوز ٤٠٠ م.ب — انقله إلى خادمٍ ثابت."
+          fi
+          cd /tmp/save
+          git init -q -b "$STATE_BRANCH"
+          git config user.name  "rooh"
+          git config user.email "rooh@users.noreply.github.com"
+          cat > .gitattributes <<'EOF'
+          *.db  binary
+          EOF
+          git add -A
+          git commit -q -m "جسد رُوح — $(date -u '+%Y-%m-%d %H:%M') UTC" || exit 0
+          # فرعُ حالةٍ بلا تاريخ: لا نراكم آلاف النسخ من قاعدة البيانات
+          git push -q --force \
+            "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" \
+            "$STATE_BRANCH"
+          echo "حُفظ في فرع $STATE_BRANCH"
+
+      - name: رسالة اليوم كأثرٍ يمكن تنزيله
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rooh-outbox
+          path: ${{ env.ROOH_HOME }}/outbox/
+          retention-days: 30
+          if-no-files-found: ignore
